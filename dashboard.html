@@ -335,7 +335,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.44 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.45 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -729,8 +729,12 @@ function libRow(m, i, del){
     fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
                       :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
     "</span><span class='lib-btn'>"+
-    // 不完整 / 校验未过 / 下载失败: 给「继续下载」(断点续传, 参数用当前默认)
-    ((m.state==="partial" || m.state==="bad" || m.state==="failed") && !busy
+    // 已下完 100% 只是没校验过 → 「重新校验」(只比 sha256, 不下载);
+    // 没下完 / 校验未过 / 下载失败 → 「继续下载」(断点续传, 参数用当前默认)
+    (!busy && (m.state==="partial" && m.total && m.pct >= 99.99)
+      ? "<button class='btn sm' title='只比对 sha256，不下载任何文件' onclick='verifyModel("+i+")'>重新校验</button> " : "")+
+    (!busy && (m.state==="bad" || m.state==="failed" ||
+               (m.state==="partial" && !(m.total && m.pct >= 99.99)))
       ? "<button class='btn sm' onclick='resumeModelDownload("+i+")'>继续下载</button> " : "")+
     "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
     "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
@@ -1218,6 +1222,16 @@ function copyPath(i){
   if(!t) return;
   navigator.clipboard.writeText(t).then(()=>toast("✔ 本地路径已复制")).catch(()=>toast("复制失败", false));
 }
+// 重新校验: 已下完的模型只差一次 sha256 比对。走 resume_history 的 verify 模式——
+// 独立进程、不进任务列表、不打断下载; 校验完写 verify_result.json, 状态自然变成"完整/校验未过"
+async function verifyModel(i){
+  const m=(libModels||[])[i]; if(!m) return;
+  const d=await post({action:"resume_history", repo:m.repo, dest:m.dest, mode:"verify"});
+  if(!d.ok){ toast("无法校验："+d.error, false); return; }
+  toast("✔ 已在后台开始校验（只比对 sha256，不下载），稍后刷新看结果");
+  setTimeout(loadLib, 4000);
+}
+
 // 继续下载: 用当前默认参数(线程数/下载源)重新入队, 断点续传。
 // 下载脚本会先做"续传预检"——已存在但 sha256 不符的文件会被删掉重下, 避免带着错误继续。
 async function resumeModelDownload(i){
