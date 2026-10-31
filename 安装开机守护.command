@@ -15,9 +15,14 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 echo "[1/4] 部署运行时到: $RT"
 mkdir -p "$RT"
-for f in progress_server.py dashboard.html hf_download.sh hfd.sh localhost.crt localhost.key; do
+for f in progress_server.py dashboard.html hf_download.sh hfd.sh localhost.crt localhost.key manifest.webmanifest; do
   [ -f "$SRC/$f" ] && cp -f "$SRC/$f" "$RT/$f"
 done
+# PWA 图标等静态资源
+if [ -d "$SRC/assets" ]; then
+  mkdir -p "$RT/assets"
+  cp -f "$SRC/assets/"* "$RT/assets/" 2>/dev/null || true
+fi
 chmod +x "$RT/hf_download.sh" "$RT/hfd.sh" 2>/dev/null || true
 # 首次部署时把当前任务配置带过去; 之后运行时维护自己的配置, 不覆盖
 [ -f "$RT/dl_config.json" ] || { [ -f "$SRC/dl_config.json" ] && cp -f "$SRC/dl_config.json" "$RT/dl_config.json" || true; }

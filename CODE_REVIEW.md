@@ -337,3 +337,22 @@ v2.31 上线的列表视图在真实数据下暴露出三处显示问题（用�
 **同时修复上一版遗留的真实缺陷**：自动审计发现表头 `速度 MB/s` 宽 67px 而列宽只有 64px → 表头溢出压到相邻列。速度列加宽到 88px、进度列收窄到 118px 后归零。
 
 **验证**：新增「溢出审计」——在页面注入脚本遍历 `body *`，比对 `scrollWidth > clientWidth` 且 `overflow-x:visible` 的元素，结果写入 DOM 后用 `chrome --dump-dom` 读出。三档视口（500×932 / 932×430 / 1120×800）均为 `OVERFLOW=false COUNT=0`；另用「430 内容宽度」模拟 iPhone 15 Pro Max 实测同样归零。配合 headless 截图目视核对卡片视图与列表视图两套布局（headless Chrome 最小窗宽 500px，故 430 通过收缩内容宽度模拟）。
+
+## 三十四、v2.34 调整记录（添加到主屏幕 / PWA）
+
+用户主力设备 iPhone 15 Pro Max，希望像原生 App 一样从主屏幕启动。这需要两件事：**图标与 manifest**，以及**手机能访问到 Mac 上的服务**（此前服务只绑 `127.0.0.1`，手机根本连不上）。
+
+**图标**：按 logo-svg-generator 规范设计了 5 个候选（24×24 单路径、无描边、触边、居中，全部通过 `validate_svg.py`），经三轮视觉评审迭代（层叠横线在 32px 糊成一块、H 重心偏右、速度线像方砖——均已修正）。用户选定「托盘」方案，生成：
+`assets/apple-touch-icon.png`(180) / `icon-192` / `icon-512` / `icon-maskable-512`（Android 安全区字形缩小到 46%）/ `favicon-32.png` / `favicon.svg`。全部经 PIL 校验为**不透明**（iOS 主屏幕图标带透明通道会被填黑）。
+
+**PWA**：新增 `manifest.webmanifest`（standalone、主题色 `#0f1420`）；`dashboard.html` 头部加 manifest / apple-touch-icon / `apple-mobile-web-app-capable` / `black-translucent` 状态栏 / `apple-mobile-web-app-title`。配合 `black-translucent` 补充了 `padding-top: env(safe-area-inset-top)`，内容不会被刘海压住。
+
+**静态资源路由**：服务新增 `_serve_static()`，只暴露 `manifest.webmanifest` 与 `assets/` 目录，且用 `realpath` 前缀校验把路径限制在 `assets/` 内（实测 `/assets/../../etc/passwd` 返回 404）。图标带 `Cache-Control: max-age=86400`，首页仍为 `no-store`。
+
+**局域网访问（关键前提）**：
+- 服务监听地址 `127.0.0.1` → **`0.0.0.0`**
+- 新增配置 `lan`（默认 `false`）：未开启时 `do_GET/do_POST` 对非本机来源（非 `127.0.0.1/::1`）一律 **403**，手机打开只会看到提示文案；开启后放行
+- `_same_origin()` 的 Host/Origin 白名单从固定 `localhost/127.0.0.1` 扩为 `ALLOWED_HOSTS = 本机回环 + 本机所有 IPv4`（启动时用 `getaddrinfo` + UDP 出口地址探测），伪造 `Host: evil.com` 仍返回 403
+- 前端「默认设置」新增「访问范围」下拉与提示，直接显示手机可用的完整地址；开关即时生效，无需重启（因为始终监听 `0.0.0.0`）
+
+**验证**：`manifest`/各图标 HTTP 200 且 MIME 正确（`application/manifest+json`、`image/png`、`image/svg+xml`）；路径穿越 404；`Host: evil.com` 403 / `Host: 192.168.1.13` 200；页面头部 6 项 PWA 标记齐全；窄屏截图确认「访问范围」下拉与手机地址提示正常渲染。已为用户开启局域网访问（关闭方式：同一处切回「仅本机」）。

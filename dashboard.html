@@ -4,6 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>HuggingFace 模型下载器</title>
+<!-- 添加到主屏幕 / PWA -->
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
+<meta name="theme-color" content="#0f1420">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HF 下载器">
 <style>
   :root { --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad; --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b; }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -118,6 +128,7 @@
   @media (max-width:640px){
     body {
       padding:10px;
+      padding-top:calc(10px + env(safe-area-inset-top));
       padding-left:calc(10px + env(safe-area-inset-left));
       padding-right:calc(10px + env(safe-area-inset-right));
       padding-bottom:calc(10px + env(safe-area-inset-bottom));
@@ -216,7 +227,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.33 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.34 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -343,6 +354,14 @@
       <button class="btn sm" id="setTokenBtn">输入 token</button>
     </div>
     <div class="hint" style="margin-top:4px">token 从 ~/.huggingface/token 读取，不会显示。</div>
+    <div class="row" style="margin-top:8px">
+      <span class="hint" style="width:84px">访问范围</span>
+      <select id="setLan" style="padding:6px 10px">
+        <option value="0">仅本机（默认）</option>
+        <option value="1">允许局域网访问（手机/平板）</option>
+      </select>
+    </div>
+    <div class="hint" id="lanHint" style="margin-top:4px"></div>
     <div class="row" style="margin-top:12px">
       <button class="btn primary" id="saveSetBtn">保存设置</button>
       <span class="hint">保存后新下载的模型使用以上设置</span>
@@ -485,8 +504,12 @@ $("saveConsoleBtn").onclick=async()=>{
 };
 
 // ---- 设置 ----
+let lanTouched = false;
+$("setLan").onchange=()=>{ lanTouched = true; };
 $("saveSetBtn").onclick=async()=>{
-  const d=await post({action:"set_config", default_root:$("setRoot").value, username:$("setUser").value});
+  const d=await post({action:"set_config", default_root:$("setRoot").value, username:$("setUser").value,
+                      lan: $("setLan").value==="1"});
+  if(d.ok) lanTouched=false;
   $("setmsg").textContent=d.ok?"已保存":"保存失败："+(d.error||"");
   $("setmsg").style.color = d.ok ? "var(--acc)" : "var(--red)";
   setTimeout(()=>$("setmsg").textContent="",3500);
@@ -577,6 +600,14 @@ async function refresh(){
       if(!$("setUser").value) $("setUser").value=d.cfg.username||"";
       if($("setSpeed").value==="" && d.cfg.speed_limit) $("setSpeed").value=d.cfg.speed_limit;
       syncTokenTag(d.cfg.has_token);
+      if(!lanTouched && $("setLan")) $("setLan").value = d.cfg.lan ? "1" : "0";
+      if($("lanHint")){
+        const urls = d.cfg.lan_urls || [];
+        $("lanHint").innerHTML = d.cfg.lan
+          ? (urls.length ? "已允许局域网访问，手机 Safari 打开：<b>"+urls.map(esc).join("</b> 或 <b>")+"</b>"
+                         : "已允许局域网访问")
+          : "默认仅本机可访问（127.0.0.1）。要让 iPhone 用，切到「允许局域网访问」并保存；同一 Wi-Fi 下的其他设备届时也能打开此页面。";
+      }
       buildConsoleOptions(d.consts.max_conn, d.consts.max_models_limit,
                           d.cfg.global_j, d.cfg.max_models, d.cfg.x, d.cfg.alloc_mode);
     }
