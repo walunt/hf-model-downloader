@@ -8,7 +8,7 @@
   :root { --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad; --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b; }
   * { box-sizing:border-box; margin:0; padding:0; }
   body { background:var(--bg); color:var(--txt); font:14px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif; padding:24px; }
-  .wrap { max-width:860px; margin:0 auto; }
+  .wrap { max-width:1040px; margin:0 auto; }
   h1 { font-size:18px; font-weight:600; margin-bottom:4px; }
   .ver { font-size:11px; font-weight:400; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:2px 9px; margin-left:8px; vertical-align:middle; }
   .sub { color:var(--dim); font-size:12px; margin-bottom:20px; }
@@ -93,18 +93,22 @@
   .viewswitch button.on { background:#233254; color:var(--txt); }
   /* 列表视图 */
   .tblwrap { overflow-x:auto; margin-top:4px; }
-  #taskTable { width:100%; border-collapse:collapse; font-size:12px; }
+  #taskTable { width:100%; min-width:820px; border-collapse:collapse; font-size:12px; table-layout:fixed; }
   #taskTable th { text-align:left; color:var(--dim); font-weight:400; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
   #taskTable td { padding:8px; border-bottom:1px dashed #202a42; vertical-align:middle; }
   #taskTable tbody tr:last-child td { border-bottom:none; }
   #taskTable tbody tr:hover { background:#141b2b; }
   #taskTable .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  #taskTable .rname { max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; cursor:pointer; }
-  #taskTable .rsub { font-size:11px; color:var(--dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
-  #taskTable .rsub2 { font-size:11px; color:var(--dim); }
-  #taskTable .pctnum { text-align:right; }
-  #taskTable .opscell .btn { padding:4px 8px; }
-  .pbar { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; overflow:hidden; min-width:90px; }
+  #taskTable .badge { white-space:nowrap; }              /* 关键: 否则窄列会把"已暂停"竖排 */
+  #taskTable .vflag { color:var(--red); margin-left:3px; font-size:11px; }
+  #taskTable .rname { width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; cursor:pointer; }
+  #taskTable .rsub { font-size:11px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+  #taskTable .prow { display:flex; align-items:center; gap:8px; }
+  #taskTable .pbar { flex:1; min-width:52px; }
+  #taskTable .pnum { width:42px; flex-shrink:0; text-align:right; font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  #taskTable .opscell { white-space:nowrap; text-align:right; padding-right:2px; }
+  #taskTable .opscell .btn { padding:4px 7px; font-size:11px; margin-left:4px; }
+  .pbar { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; overflow:hidden; }
   .pbar > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
   #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transition:opacity .25s;pointer-events:none;max-width:80vw;text-align:center;}
   #toast.show{opacity:1;}
@@ -153,7 +157,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.31 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.32 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -551,10 +555,19 @@ function jCell(manual, pool, t){
   for(let j=1;j<=pool;j++) opts+="<option value='"+j+"'"+(t.j===j?" selected":"")+">"+j+"</option>";
   return "<select class='jsel' data-dest=\""+esc(t.dest)+"\" style='padding:2px 4px;font-size:12px'>"+opts+"</select>";
 }
-function opsHtml(t,i){
+function opsHtml(t,i,short){
+  const delTxt = short ? "删除" : "删除任务";   // 列表视图列宽有限, 用短文案
+  const delTitle = short ? " title='删除任务（可选是否连本地文件一起删）'" : "";
   return "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
          "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+
-         "<button class='btn sm del' onclick='removeTask("+i+")'>删除任务</button>";
+         "<button class='btn sm del'"+delTitle+" onclick='removeTask("+i+")'>"+delTxt+"</button>";
+}
+
+function etaShort(s){
+  if(!s || s<=0 || !isFinite(s)) return "—";
+  const h=Math.floor(s/3600), m=Math.round((s%3600)/60);
+  if(h>0) return h+"h"+(m<10?"0":"")+m+"m";
+  return Math.max(1,m)+"m";
 }
 
 function taskCardHtml(d,t,i){
@@ -594,23 +607,31 @@ function taskListHtml(d, tasks){
     const bd=taskBadge(t, d.dl_running);
     const bad = t.verify && (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total);
     const sub = esc(t.last_msg || (epName(t.endpoint)+" · "+t.files_done+"/"+(t.files_expected||"?")+" 文件"));
+    const rate = t.rate>0 ? (t.rate/1e6).toFixed(1) : "—";
+    // 列宽有限: 失败/校验中用短文案, 完整原因放 title
+    const btxt = t.phase==="failed" ? "✕ 失败" : (t.phase==="verifying" ? "◌ 校验中" : bd.txt);
     return "<tr>"+
-      "<td><span class='badge "+bd.cls+"'>"+bd.txt+"</span>"+(bad?"<span class='badge bad' style='margin-left:4px'>校验未过</span>":"")+"</td>"+
+      "<td><span class='badge "+bd.cls+"' title='"+escA(bd.txt)+"'>"+btxt+"</span>"+
+        (bad?"<span class='vflag' title='sha256 校验未通过'>⚠</span>":"")+"</td>"+
       "<td><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
         "<div class='rsub'>"+sub+"</div></td>"+
-      "<td class='wpct'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
-        "<div class='rsub pctnum'>"+t.pct.toFixed(1)+"%</div></td>"+
-      "<td class='num'>"+fmtGB(t.downloaded)+" <span class='rsub2'>/ "+(t.total?fmtGB(t.total):"?")+"</span> <span class='rsub2'>GB</span></td>"+
-      "<td class='num'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <span class='rsub2'>MB/s</span></td>"+
-      "<td class='num'>"+fmtEta(t.eta_sec)+"</td>"+
-      "<td class='num'>"+jCell(manual,pool,t)+"<span class='rsub2'> / "+pool+"</span></td>"+
-      "<td class='num opscell'>"+opsHtml(t,i)+"</td>"+
+      "<td><div class='prow'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
+        "<span class='pnum'>"+t.pct.toFixed(1)+"%</span></div></td>"+
+      "<td class='num'>"+fmtGB(t.downloaded)+" / "+(t.total?fmtGB(t.total):"?")+"</td>"+
+      "<td class='num'>"+rate+"</td>"+
+      "<td class='num'>"+etaShort(t.eta_sec)+"</td>"+
+      "<td class='num'>"+(manual ? jCell(manual,pool,t) : t.j+" / "+pool)+"</td>"+
+      "<td class='opscell'>"+opsHtml(t,i,true)+"</td>"+
     "</tr>";
   }).join("");
-  return "<div class='tblwrap'><table id='taskTable'><thead><tr>"+
-    "<th>状态</th><th>模型</th><th style='min-width:130px'>进度</th>"+
-    "<th class='num'>已下载 / 总量</th><th class='num'>速度</th><th class='num'>剩余</th>"+
-    "<th class='num'>分片</th><th></th></tr></thead><tbody>"+rows+"</tbody></table></div>";
+  // 固定列宽(table-layout:fixed): 状态与操作列不再被长内容挤压, 模型列吃掉剩余宽度
+  return "<div class='tblwrap'><table id='taskTable'>"+
+    "<colgroup><col style='width:78px'><col><col style='width:124px'>"+
+    "<col style='width:120px'><col style='width:64px'><col style='width:56px'>"+
+    "<col style='width:66px'><col style='width:146px'></colgroup>"+
+    "<thead><tr><th>状态</th><th>模型</th><th>进度</th>"+
+    "<th class='num'>已下载 / 总量 GB</th><th class='num'>速度 MB/s</th><th class='num'>剩余</th>"+
+    "<th class='num'>分片/池</th><th></th></tr></thead><tbody>"+rows+"</tbody></table></div>";
 }
 
 function renderTasks(d){
