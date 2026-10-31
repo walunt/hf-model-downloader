@@ -109,6 +109,8 @@
   .lib-item:last-child { border-bottom:none; }
   .lib-item .lib-state { flex-shrink:0; }
   .lib-item .lib-name { flex:1; min-width:0; word-break:break-all; }
+  .lib-item .lib-name[onclick] { cursor:pointer; text-decoration:underline dotted; text-decoration-color:var(--dim); }
+  .lib-item .lib-name[onclick]:hover { color:var(--acc); }
   .lib-item .lib-meta { flex-shrink:1; text-align:right; }
   .lib-item .lib-btn { flex-shrink:0; white-space:nowrap; }
   .hint { color:var(--dim); font-size:11px; }
@@ -331,7 +333,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.42 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.43 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -707,13 +709,21 @@ function libRow(m, i, del){
            : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 下载失败</span>'
            : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 文件缺失</span>'
            : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">◌ 校验中</span>'
-           // 无校验记录时的兜底: 已下完 100% 不能说"下载中"; 本地自建目录也不应暗示在下载
-           : (m.total && m.pct >= 99.99) ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">● 待校验</span>'
+           // 后端已按"是否在任务列表/队列里"区分: 只有真的在下载中才说下载中
+           : m.state==="downloading" ? '<span class="tag" style="color:var(--acc);border-color:var(--bd-live)">◌ 下载中</span>'
+           : m.state==="queued" ? '<span class="tag" style="color:var(--acc);border-color:var(--bd-live)">◌ 等待下载</span>'
            : m.local_only ? '<span class="tag">● 本地目录</span>'
-           : '<span class="tag">◌ 下载中</span>';
+           // 已下完 100% 只是没校验过: 用中性色(非警告色), 与「不完整」拉开区分度
+           : (m.total && m.pct >= 99.99) ? '<span class="tag">● 待校验</span>'
+           // partial = 没下完且不在下载任务里(中断 / 任务记录被删 / 只有部分文件)
+           : '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">⚠ 不完整</span>';
   const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
   const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
-  return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
+  // 点模型名在访达中打开本地目录(与任务卡「打开目录」一致)
+  const nameHtml = m.dest
+    ? "<span class='lib-name' title='点击在访达中打开："+escA(m.dest)+"' style='cursor:pointer' onclick='openModelDir("+i+")'>"+esc(m.repo)+"</span>"
+    : "<span class='lib-name'>"+esc(m.repo)+"</span>";
+  return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span>"+nameHtml+"<span class='lib-meta'>"+
     fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
                       :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
     "</span><span class='lib-btn'>"+
@@ -1202,6 +1212,11 @@ function copyPath(i){
   const t=(lastTasks[i]||{}).dest;
   if(!t) return;
   navigator.clipboard.writeText(t).then(()=>toast("✔ 本地路径已复制")).catch(()=>toast("复制失败", false));
+}
+async function openModelDir(i){
+  const m=(libModels||[])[i]; if(!m) return;
+  const d=await post({action:"open_dir", dest:m.dest});
+  if(!d.ok) toast("打开失败："+d.error, false);
 }
 async function openTaskDir(i){
   const t=(lastTasks||[])[i]; if(!t) return;

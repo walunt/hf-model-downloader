@@ -637,3 +637,75 @@ const errBox = errKeys.length ? '<div class="hint" ...>删除未完成：...</di
 - 生产 DOM 核对：无「读取失败」、无「下载中/未校验」、状态标签分布正确
 - 生产截图核对：模型库 18 个模型正常渲染，搜索框 / 批量 / 刷新按钮正常
 - 后端未改动，接口不变（18 个模型：12 有真实总量、6 个本地目录）
+
+## 四十三、v3.43 调整记录（模型库状态严谨化 + 点模型名打开目录）
+
+用户提两点：①模型库能否点模型名打开本地目录；②**显示「下载中」的那条模型根本不在下载列表里**——
+在下载列表里的才该是下载中，不在的应该显示"不完整"这类状态。②是真 bug，①是新功能。
+
+### ②状态不严谨：模型库不知道任务列表的存在
+
+`list_models()` 只扫目录，完全不关心 `_cfg["tasks"]`。没有校验记录的模型一律给
+`state="partial"`，前端兜底文案又是「下载中/未校验」——于是**一个中断下载、任务记录早已不在的
+模型，被显示成"下载中"**。生产上就是那条 `Cyronius/Qwen3.8-Flash-Next-131B-A6B-GGUF`（75.40/140.19 GB，54%），
+而任务列表里 5 个任务全是暂停态。
+
+修法：让 `list_models()` 感知任务列表与队列（用 `realpath` 归一化后比对 dest）：
+
+```python
+active_dest = {_rp(t["dest"]) for t in tasks.values() if t.get("want_run") or _pg_alive(t.get("pgid"))}
+queued_dest = {_rp(q["dest"]) for q in _cfg.get("queue") or []}
+...
+if   d_rp in active_dest: state = "downloading"   # 确实在下载任务中
+elif d_rp in queued_dest: state = "queued"        # 已排队, 等并发空位
+else:                     state = "partial"       # 既没下完也不在下载 = 不完整
+```
+
+前端状态优先级（顺序有意义）：
+
+| 条件 | 显示 |
+|---|---|
+| 正在删除 | ◌ 删除中 |
+| `ok` / `bad` / `failed` / `missing` / `verifying` | ✔ 完整 / ⚠ 校验未过 / ✕ 下载失败 / ✕ 文件缺失 / ◌ 校验中 |
+| `downloading` | ◌ 下载中（蓝） |
+| `queued` | ◌ 等待下载（蓝） |
+| `local_only` | ● 本地目录 |
+| `total && pct>=99.99` | ● 待校验（**中性色**） |
+| 其余（`partial`） | ⚠ 不完整（黄） |
+
+「待校验」一开始也用 warning 黄，和「不完整」几乎分不出来；改为中性色后两者一眼可辨——
+已下完只是没验过 ≠ 缺文件。
+
+生产实测：18 个模型中「下载中」**0 个**（确实没有任务在跑）、1 个「⚠ 不完整」（正是那条 54% 的 GGUF）、
+7 个「● 待校验」、若干「完整 / 本地目录」。
+
+### ①点模型名打开本地目录
+
+`/api/models` 新增返回 `dest`，前端模型名带 `onclick='openModelDir(i)'` + 虚线下划线 +
+`title` 显示完整路径。复用了任务卡已有的 `open_dir` 接口。
+
+**顺带加固 `open_dir`**：原实现只校验 `os.path.isdir(d)`，**任意存在的绝对路径都能被打开**。
+因为页面支持局域网访问（手机 Safari 打开），这等于给局域网任何能访问页面的人一个
+"在涛哥 Mac 上弹访达窗口"的入口。现在限制为：必须是 `default_root` 下的路径，
+或任务/历史里已记录的 `dest`。
+
+### 验证
+
+- 渲染测试 **72 项全过**（新增：在任务里→下载中、在队列里→等待下载、不在任务里且未下完→不完整、
+  中断的不再误标下载中、模型名可点击与 title）
+- 接口层隔离实例（端口 8791）**13 项全过**：暂停态不误标 downloading、运行态才是 downloading、
+  队列态 queued、已完成有校验 ok、`dest` 字段齐全；`open_dir` 对 `/etc` `/Users` `/System` 全部拒绝、
+  模型库目录放行、不存在目录报错
+- 生产截图核对：无「下载中」、Cyronius 那条显示「⚠ 不完整」、模型名下划线可见、两种黄/中性标签可区分
+
+### 关于"能否重新下载"
+
+目前「⚠ 不完整」的模型要续传，有两条路：顶部「添加下载」重新填同一个 repo（`hfd.sh` 支持断点续传，
+已下的 75 GB 不会重下），或「最近任务」里若有记录则点「重新下载」。
+**模型库行内暂未加「继续下载」按钮**（需先确认并发上限与参数来源），可作为下一步。
+
+### 踩坑（测试环境）
+
+起隔离实例时只复制了 `progress_server.py` / `dashboard.html`，**漏了 `localhost.crt` / `localhost.key`**，
+服务起不来报 `FileNotFoundError`。另外本机有 `HTTP_PROXY`，`urlopen("http://127.0.0.1:8791")` 会走代理
+返回 502，必须用 `urllib.request.build_opener(urllib.request.ProxyHandler({}))` 绕过。

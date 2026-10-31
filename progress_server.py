@@ -534,6 +534,15 @@ def handle_control(data, local=False):
     if action == "open_dir":
         d = expand((data.get("dest") or "").strip())
         if not d or not os.path.isdir(d): return {"ok": False, "error": "目录不存在: " + (d or "(空)")}
+        # 安全: 只允许打开默认根目录下的模型目录, 或任务/历史里已记录的目录。
+        # 有局域网访问时, 若不加限制, 任意存在的绝对路径都会被打开。
+        try: d_rp = os.path.realpath(d)
+        except OSError: d_rp = d
+        root_rp = os.path.realpath(expand(_cfg.get("default_root") or ""))
+        known = {os.path.realpath(expand(t.get("dest") or "")) for t in (_cfg.get("tasks") or {}).values()}
+        known |= {os.path.realpath(expand(h.get("dest") or "")) for h in (_cfg.get("history") or [])}
+        if d_rp != root_rp and not d_rp.startswith(root_rp + os.sep) and d_rp not in known:
+            return {"ok": False, "error": "只允许打开模型库目录或任务记录的目录"}
         _run(["open", d])
         return {"ok": True, "dest": d}
 
@@ -1292,6 +1301,19 @@ def list_models():
     不再静默截断——超过 MAX_MODELS_LIST 时返回 truncated/total, 由前端明确提示"未全部显示"。"""
     root = expand(_cfg["default_root"]); out = []
     no_up_set = set(_cfg.get("no_upstream") or [])
+    # 正在下载 / 排队等待的目录集合: 模型库的状态必须与任务列表一致——
+    # 不在任务里的目录不能标"下载中", 否则会出现"任务列表没有, 模型库却说在下载"的矛盾
+    def _rp(x):
+        try: return os.path.realpath(expand(x or ""))
+        except OSError: return ""
+    active_dest = set()      # 下载中
+    for t in (_cfg.get("tasks") or {}).values():
+        if t.get("want_run") or _pg_alive(t.get("pgid")):
+            active_dest.add(_rp(t.get("dest")))
+    queued_dest = set()      # 已排队, 等空位
+    for q in (_cfg.get("queue") or []):
+        queued_dest.add(_rp(q.get("dest")))
+    root_rp = _rp(root)
     if not os.path.isdir(root):
         return _models_resp([], 0, False)
     try: orgs = sorted(os.listdir(root))
@@ -1315,9 +1337,15 @@ def list_models():
             elif v:
                 state = "ok" if not v.get("bad") and not v.get("miss") and v.get("ok") == v.get("total") else "bad"
             else:
-                # 无校验结果时读取下载脚本的阶段标记: 明确失败/校验中的模型不能误标"下载中"
+                # 无校验结果: 先看下载脚本的阶段标记, 再看它是否真的在任务列表/队列里
                 ph = dl_phase(d)[0]
-                state = "failed" if ph == "failed" else ("verifying" if ph == "verifying" else "partial")
+                if ph == "failed": state = "failed"
+                elif ph == "verifying": state = "verifying"
+                else:
+                    d_rp = _rp(d)
+                    if d_rp in active_dest: state = "downloading"     # 确实在下载任务中
+                    elif d_rp in queued_dest: state = "queued"        # 已排队, 等并发空位
+                    else: state = "partial"                           # 既没下完也不在下载 = 不完整
             dt = ""
             mp = os.path.join(d, ".hfd", "repo_metadata.json")
             try:
@@ -1327,7 +1355,7 @@ def list_models():
                 mtime = 0
             if os.path.exists(mp):
                 dt = time.strftime("%m-%d %H:%M", time.localtime(mtime))
-            out.append({"repo": f"{org}/{name}", "bytes": bytes_, "total": tot,
+            out.append({"repo": f"{org}/{name}", "dest": d, "bytes": bytes_, "total": tot,
                         "pct": min(100.0, bytes_ / tot * 100) if tot else 0,
                         "state": state, "date": dt, "verify": v, "_mtime": mtime,
                         # local_only: 上游查不到该仓库(本地自建/已删除), 前端据此改显示"本地目录"而非"总量未知"
