@@ -9,43 +9,80 @@
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/assets/favicon-32.png">
-<meta name="theme-color" content="#0f1420">
+<meta name="theme-color" content="var(--bg)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="HF 下载器">
 <style>
-  :root { --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad; --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b; }
+  /* ============ 样式分区索引 ============
+     1. 变量与主题      :root / html[data-theme="light"]
+     2. 布局与通用      .wrap .card .row .btn .badge .tag
+     3. 下载任务卡片    .task .cline .srow .bar .pbar .ops
+     4. 列表视图        #taskTable 及移动端堆叠
+     5. 队列 / 历史 / 模型库  .q-row .hist-row .lib-item
+     6. 弹窗与遮罩      #delModal #rmTaskModal #btRmModal #authModal
+     7. 移动端断点      @media (max-width:640px)
+     ====================================== */
+  :root {
+    --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad;
+    --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b;
+    /* 表面层(浅色主题整体替换) */
+    --card2:#141b2b;    /* 任务卡 / 批量栏 */
+    --inset:#0c1120;    /* 进度条槽 */
+    --inset2:#10162a;   /* 单元格 / 徽标底 */
+    --line2:#202a42;    /* 虚线分隔 */
+    --hover:#1b2338;
+    --input:#0e1421;
+    --shadow:rgba(0,0,0,.5);
+    /* 状态色的浅底与描边 */
+    --bd-ok:#1f5c38; --bg-ok:#0f2419;
+    --bd-bad:#5c2230; --bg-bad:#240f14;
+    --bd-warn:#5c471f; --bg-warn:#241d0f;
+    --bd-live:#1e4a7a; --bg-live:#0b1a2b;
+    --bd-verify:#17545e; --bg-verify:#06222a;
+  }
+  html[data-theme="light"] {
+    --bg:#f2f5fa; --card:#ffffff; --line:#dde3ee; --txt:#1a2233; --dim:#68738a;
+    --acc:#2f6bff; --ok:#1f8a4c; --warn:#a1650f; --red:#c33a50;
+    --card2:#ffffff; --inset:#e9edf5; --inset2:#f5f7fb; --line2:#e4e9f2;
+    --hover:#eef2f9; --input:#ffffff; --shadow:rgba(24,36,60,.16);
+    --bd-ok:#a6d8bd; --bg-ok:#eaf7ef;
+    --bd-bad:#eac0c6; --bg-bad:#fdeef0;
+    --bd-warn:#e3d0a8; --bg-warn:#fdf6e8;
+    --bd-live:#aac8ec; --bg-live:#eaf2fd;
+    --bd-verify:#a5d8de; --bg-verify:#e9f8fa;
+  }
   * { box-sizing:border-box; margin:0; padding:0; }
   body { background:var(--bg); color:var(--txt); font:14px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif; padding:24px; }
   .wrap { max-width:1040px; margin:0 auto; }
-  h1 { font-size:18px; font-weight:600; margin-bottom:4px; }
+  h1 { font-size:18px; font-weight:600; margin-bottom:4px; display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
   .ver { font-size:11px; font-weight:400; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:2px 9px; margin-left:8px; vertical-align:middle; }
   .sub { color:var(--dim); font-size:12px; margin-bottom:20px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
   h2 { font-size:13px; color:var(--dim); margin:0 0 12px; font-weight:500; display:flex; align-items:center; gap:10px; }
-  input[type=text], input[type=number], select { background:#10162a; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font-size:13px; outline:none; }
+  input[type=text], input[type=number], select { background:var(--inset2); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font-size:13px; outline:none; }
   input[type=text]:focus, select:focus { border-color:var(--acc); }
   .grow { flex:1; min-width:0; }
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
-  .btn { background:#10162a; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 15px; font-size:13px; cursor:pointer; }
+  .btn { background:var(--inset2); color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 15px; font-size:13px; cursor:pointer; }
   .btn:hover { border-color:var(--acc); }
   .btn.primary { background:linear-gradient(90deg,#2f6bff,#4f8cff); border-color:transparent; color:#fff; font-weight:600; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
   .btn.sm { padding:6px 11px; font-size:12px; }
-  .btn.del { border-color:#5c2230; color:var(--red); }
-  .btn.del:hover { border-color:var(--red); background:#240f14; }
+  .btn.del { border-color:var(--bd-bad); color:var(--red); }
+  .btn.del:hover { border-color:var(--red); background:var(--bg-bad); }
   .badge { font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
-  .badge.run { color:var(--ok); border-color:#1f5c38; background:#0f2419; }
-  .badge.live { color:#5aa8ff; border-color:#1e4a7a; background:#0b1a2b; }  /* 下载中: 蓝色, 与已完成的绿色区分 */
-  .badge.stop { color:var(--warn); border-color:#5c471f; background:#241d0f; }
-  .badge.verify { color:#2fd3e0; border-color:#17545e; background:#06222a; }  /* 校验中: 青色, 与琥珀的已暂停区分 */
-  .badge.bad { color:var(--red); border-color:#5c2230; background:#240f14; }
+  .badge.run { color:var(--ok); border-color:var(--bd-ok); background:var(--bg-ok); }
+  .badge.live { color:#5aa8ff; border-color:var(--bd-live); background:var(--bg-live); }  /* 下载中: 蓝色, 与已完成的绿色区分 */
+  .badge.stop { color:var(--warn); border-color:var(--bd-warn); background:var(--bg-warn); }
+  .badge.verify { color:#2fd3e0; border-color:var(--bd-verify); background:var(--bg-verify); }  /* 校验中: 青色, 与琥珀的已暂停区分 */
+  .badge.bad { color:var(--red); border-color:var(--bd-bad); background:var(--bg-bad); }
   .tag { font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--dim); }
-  .tag.gated { color:var(--warn); border-color:#5c471f; }
-  .info { background:#10162a; border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px; font-size:13px; display:none; }
+  .tag.gated { color:var(--warn); border-color:var(--bd-warn); }
+  .info { background:var(--inset2); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px; font-size:13px; display:none; }
   .info .kv { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:8px 0; }
-  .info .kv div { background:#0c1120; border-radius:7px; padding:8px 10px; }
+  .info .kv div { background:var(--inset); border-radius:7px; padding:8px 10px; }
   .info .kv .k { font-size:11px; color:var(--dim); } .info .kv .v { font-size:15px; font-weight:600; }
   .err { color:var(--red); font-size:13px; margin-top:8px; }
   .top { display:flex; align-items:baseline; gap:12px; }
@@ -53,22 +90,22 @@
   .pct { font-size:34px; font-weight:700; letter-spacing:-1px; }
   .pct small { font-size:16px; color:var(--dim); font-weight:500; }
   .stat { margin-left:auto; text-align:right; font-size:12px; color:var(--dim); }
-  .bar { height:12px; background:#0c1120; border:1px solid var(--line); border-radius:99px; margin:12px 0 10px; overflow:hidden; }
+  .bar { height:12px; background:var(--inset); border:1px solid var(--line); border-radius:99px; margin:12px 0 10px; overflow:hidden; }
   .bar > div { height:100%; width:0%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
   .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
-  .cell { background:#10162a; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .cell { background:var(--inset2); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
   .cell .k { font-size:11px; color:var(--dim); } .cell .v { font-size:15px; font-weight:600; margin-top:2px; }
   .cell .v small { font-size:11px; color:var(--dim); font-weight:400; }
   .files { list-style:none; margin-top:6px; }
-  .files li { display:block; font-size:12px; padding:6px 0; border-bottom:1px dashed #202a42; }
+  .files li { display:block; font-size:12px; padding:6px 0; border-bottom:1px dashed var(--line2); }
   .files li:last-child { border-bottom:none; }
   .frow { display:flex; justify-content:space-between; gap:12px; }
   .files .n { color:#c6d2ea; font-family:ui-monospace,Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .files .s { color:var(--dim); margin-left:12px; white-space:nowrap; }
-  .mini { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; margin-top:4px; overflow:hidden; }
+  .mini { height:6px; background:var(--inset); border:1px solid var(--line); border-radius:99px; margin-top:4px; overflow:hidden; }
   .mini > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
-  #log { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#9fb3d9; background:#0c1120; border:1px solid var(--line); border-radius:8px; padding:10px; height:160px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
-  .lib-item { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#9fb3d9; background:var(--inset); border:1px solid var(--line); border-radius:8px; padding:10px; height:160px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
+  .lib-item { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed var(--line2); }
   .lib-item:last-child { border-bottom:none; }
   .lib-item .lib-state { flex-shrink:0; }
   .lib-item .lib-name { flex:1; min-width:0; word-break:break-all; }
@@ -77,29 +114,29 @@
   .hint { color:var(--dim); font-size:11px; }
   label.inl { font-size:13px; display:flex; align-items:center; gap:6px; }
   .msg { font-size:12px; color:var(--acc); margin-top:8px; min-height:16px; }
-  .vbar { font-size:12px; border-radius:8px; padding:8px 12px; margin-top:10px; border:1px solid var(--line); background:#10162a; }
-  .vbar.ok { color:var(--ok); border-color:#1f5c38; background:#0f2419; }
-  .vbar.bad { color:var(--red); border-color:#5c2230; background:#240f14; }
-  .hist-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  .vbar { font-size:12px; border-radius:8px; padding:8px 12px; margin-top:10px; border:1px solid var(--line); background:var(--inset2); }
+  .vbar.ok { color:var(--ok); border-color:var(--bd-ok); background:var(--bg-ok); }
+  .vbar.bad { color:var(--red); border-color:var(--bd-bad); background:var(--bg-bad); }
+  .hist-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed var(--line2); }
   .hist-row:last-child { border-bottom:none; }
   .hist-row .hr { flex:1; min-width:0; }
   .hist-row .hr b { font-weight:500; word-break:break-all; }
   .hist-row .ht { color:var(--dim); font-size:11px; }
-  .ratechart { margin:14px 0 4px; background:#0c1120; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .ratechart { margin:14px 0 4px; background:var(--inset); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
   .ratechart .k { font-size:11px; color:var(--dim); display:flex; justify-content:space-between; }
   #rateCanvas { width:100%; height:52px; display:block; margin-top:4px; }
-  .q-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  .q-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed var(--line2); }
   .q-row:last-child { border-bottom:none; }
   .q-row .qn { flex:1; min-width:0; } .q-row .qn b { font-weight:500; word-break:break-all; }
   .q-no { color:var(--acc); font-size:11px; margin-right:2px; }
   .diskline { font-size:12px; margin-top:8px; }
   .diskline.ok { color:var(--ok); } .diskline.bad { color:var(--red); }
-  .task { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; background:#141b2b; }
+  .task { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; background:var(--card2); }
   .task:last-child { margin-bottom:0; }
   .task .ops { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
   /* 批量操作 */
   .batchbar { display:none; gap:8px; align-items:center; flex-wrap:wrap;
-              margin:8px 0 2px; padding:8px 10px; background:#141b2b;
+              margin:8px 0 2px; padding:8px 10px; background:var(--card2);
               border:1px solid var(--line); border-radius:8px; }
   .batchbar .hint { margin-right:auto; }
   .chkwrap { display:flex; align-items:center; gap:6px; }
@@ -108,16 +145,22 @@
   #taskTable td.cchk { text-align:center; }
   /* 视图切换 */
   .viewswitch { margin-left:auto; display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
-  .viewswitch button { background:#10162a; color:var(--dim); border:none; padding:4px 12px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .viewswitch button { background:var(--inset2); color:var(--dim); border:none; padding:4px 12px; font-size:12px; cursor:pointer; font-family:inherit; }
   .viewswitch button:hover { color:var(--txt); }
-  .viewswitch button.on { background:#233254; color:var(--txt); }
+  .viewswitch button.on { background:var(--hover); color:var(--txt); }
+  /* 主题切换 / 模型库搜索 */
+  #btnTheme { margin-left:auto; white-space:nowrap; }
+  #libSearch { padding:5px 9px; font-size:12px; border-radius:7px; border:1px solid var(--line);
+               background:var(--input); color:var(--txt); width:170px; }
+  #libSearch::placeholder { color:var(--dim); }
+  .qchk { width:16px; height:16px; accent-color:#2f6bff; cursor:pointer; flex-shrink:0; }
   /* 列表视图 */
   .tblwrap { overflow-x:auto; margin-top:4px; }
   #taskTable { width:100%; min-width:820px; border-collapse:collapse; font-size:12px; table-layout:fixed; }
   #taskTable th { text-align:left; color:var(--dim); font-weight:400; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  #taskTable td { padding:8px; border-bottom:1px dashed #202a42; vertical-align:middle; }
+  #taskTable td { padding:8px; border-bottom:1px dashed var(--line2); vertical-align:middle; }
   #taskTable tbody tr:last-child td { border-bottom:none; }
-  #taskTable tbody tr:hover { background:#141b2b; }
+  #taskTable tbody tr:hover { background:var(--card2); }
   #taskTable .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
   #taskTable .badge { white-space:nowrap; }              /* 关键: 否则窄列会把"已暂停"竖排 */
   #taskTable .vflag { color:var(--red); margin-left:3px; font-size:11px; }
@@ -131,12 +174,12 @@
   /* 进度条按状态分色: 已完成绿 / 下载中蓝(默认) / 已暂停灰 / 校验中青 / 失败红 */
   .bar.bar-done > div, .pbar.bar-done > div { background:linear-gradient(90deg,#1f7a45,#38c172); }
   .bar.bar-idle > div, .pbar.bar-idle > div { background:linear-gradient(90deg,#333d52,#4d576e); }
-  .bar.bar-verify > div, .pbar.bar-verify > div { background:linear-gradient(90deg,#17545e,#2fd3e0); }
+  .bar.bar-verify > div, .pbar.bar-verify > div { background:linear-gradient(90deg,var(--bd-verify),#2fd3e0); }
   .bar.bar-bad > div, .pbar.bar-bad > div { background:linear-gradient(90deg,#7a2233,#e0556b); }
 
   /* 已完成任务折叠成紧凑一行(点「展开」看完整信息) */
   .task.compact { padding:10px 12px; margin-bottom:8px; }
-  .task.compact .cline { display:flex; align-items:center; gap:8px; }
+  .task.compact .cline { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   .task.compact .cname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
                          font-size:13px; font-weight:500; cursor:pointer; }
   .task.compact .cpct { font-size:12px; color:var(--ok); font-variant-numeric:tabular-nums; flex-shrink:0; }
@@ -150,19 +193,19 @@
   .srow .si b { font-weight:600; font-variant-numeric:tabular-nums; }
   .srow .si u { text-decoration:none; color:var(--dim); font-size:11px; }
   .expandbtn { background:none; border:none; color:var(--dim); font-size:11px; cursor:pointer; padding:3px 6px; border-radius:5px; }
-  .expandbtn:hover { color:var(--txt); background:#1b2338; }
+  .expandbtn:hover { color:var(--txt); background:var(--hover); }
 
   /* 失效历史(目录已被删除) */
   .hist-row.dead { opacity:.6; }
   .hist-row.dead .hr b { text-decoration:line-through; }
-  .dead-tag { color:var(--red); border:1px solid #5c2230; border-radius:4px; font-size:10px; padding:1px 5px; margin-left:6px; }
+  .dead-tag { color:var(--red); border:1px solid var(--bd-bad); border-radius:4px; font-size:10px; padding:1px 5px; margin-left:6px; }
 
-  .pbar { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; overflow:hidden; }
+  .pbar { height:6px; background:var(--inset); border:1px solid var(--line); border-radius:99px; overflow:hidden; }
   .pbar > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
   #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transition:opacity .25s;pointer-events:none;max-width:80vw;text-align:center;}
   #toast.show{opacity:1;}
-  #toast.ok{color:var(--ok);border-color:#1f5c38;}
-  #toast.bad{color:var(--red);border-color:#5c2230;}
+  #toast.ok{color:var(--ok);border-color:var(--bd-ok);}
+  #toast.bad{color:var(--red);border-color:var(--bd-bad);}
   /* ---------- 移动端（≤640px：iPhone 竖屏，430×932）---------- */
   @media (max-width:640px){
     body {
@@ -288,7 +331,8 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.40 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.41 · 本系统由核桃制作</span>
+    <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -328,8 +372,15 @@
 
   <!-- 下载队列 -->
   <div class="card" id="queueCard" style="display:none">
-    <h2>下载队列 <button class="btn sm" id="clearQ" style="margin-left:auto">清空</button></h2>
+    <h2>下载队列 <button class="btn sm" id="btnBatchQueue">多选</button>
+      <button class="btn sm" id="clearQ" style="margin-left:auto">清空</button></h2>
     <div class="hint" style="margin-bottom:6px">同时下载的模型数有空位时，按顺序自动开始下一个。</div>
+    <div class="batchbar" id="queueBatchBar">
+      <span class="hint" id="queueBatchInfo">已选 0 项</span>
+      <button class="btn sm" id="btnQueueAll">全选</button>
+      <button class="btn sm del" id="btnQueueRemove">移除选中</button>
+      <button class="btn sm" id="btnQueueCancel">取消</button>
+    </div>
     <div id="queue"></div>
   </div>
 
@@ -405,7 +456,7 @@
 
   <!-- 最近任务 -->
   <div class="card" id="histCard" style="display:none">
-    <h2>最近任务 <span id="histDeadTag" class="badge" style="display:none;color:var(--red);border-color:#5c2230"></span>
+    <h2>最近任务 <span id="histDeadTag" class="badge" style="display:none;color:var(--red);border-color:var(--bd-bad)"></span>
       <button class="btn sm" id="btnCleanHist" style="margin-left:auto;display:none">清理失效记录</button></h2>
     <div id="hist"></div>
   </div>
@@ -450,6 +501,7 @@
   <!-- 本地模型库 -->
   <div class="card">
     <h2>本地模型库 <span class="badge" id="libCount">--</span>
+      <input id="libSearch" type="search" placeholder="搜索模型（org/name）" autocomplete="off">
       <button class="btn sm" id="btnBackfill" style="display:none">补全元数据</button>
       <button class="btn sm" id="btnBatchLib">批量</button>
       <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
@@ -478,6 +530,15 @@
 </div>
 
 <script>
+/* ============ 脚本分区索引 ============
+   1. 工具函数        esc / escA / fmtXXX / copyPath / toast
+   2. 访问口令        AUTH / showAuth / tryAuth
+   3. 轮询与渲染      refresh → renderTasks / renderQueue / renderHist
+   4. 任务视图        taskBadge / barCls / taskCardHtml / taskListHtml / opsHtml
+   5. 批量选择        任务 / 队列 / 模型库 三套
+   6. 模型库          libRow / renderLibRows / loadLib / 删除与补全
+   7. 设置与安全      保存设置 / 访问口令 / 主题
+   ====================================== */
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const escA = s => esc(s).replace(/'/g,"&#39;");   // 单引号属性用
@@ -635,7 +696,46 @@ $("setTokenBtn").onclick=async()=>{
 $("speedQuick").onchange=()=>{ if($("speedQuick").value!==""){ $("setSpeed").value=$("speedQuick").value; $("speedQuick").value=""; } };
 
 // ---- 本地模型库 ----
-let libModels=[];
+let libModels=[], libShown=[];
+let libTrunc="", libErrBox="";
+// 单行渲染: 索引 i 始终指向 libModels 的下标, 搜索过滤后按钮仍能定位到正确模型
+function libRow(m, i, del){
+  const busy = !!del[m.repo];
+  const st = busy ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">◌ 删除中</span>'
+           : m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:var(--bd-ok)">✔ 完整</span>'
+           : m.state==="bad" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">⚠ 校验未过</span>'
+           : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 下载失败</span>'
+           : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 文件缺失</span>'
+           : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">◌ 校验中</span>'
+           : '<span class="tag">下载中/未校验</span>';
+  const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
+  const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
+  return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
+    fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
+                      :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
+    "</span><span class='lib-btn'>"+
+    "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
+    "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
+}
+// 搜索只影响显示, 不改 libModels 顺序与下标(批量全选针对"当前可见")
+function renderLibRows(){
+  const all = libModels || [];
+  const q = (($("libSearch")||{}).value || "").trim().toLowerCase();
+  const pairs = all.map((m,i)=>({m:m, i:i}));
+  const shown = q ? pairs.filter(p=>(p.m.repo||"").toLowerCase().includes(q)) : pairs;
+  libShown = shown.map(p=>p.m.repo);
+  const note = q ? '<div class="hint" style="margin-bottom:6px">匹配 '+shown.length+' 个 / 共 '+all.length+' 个</div>' : "";
+  if(!shown.length){
+    $("lib").innerHTML = libTrunc + libErrBox + note + '<span class="hint">没有匹配的模型，换个关键词试试</span>';
+    updateBatchBars(); return;
+  }
+  $("lib").innerHTML = libTrunc + libErrBox + note + shown.map(p=>libRow(p.m, p.i, libDeleting||{})).join("");
+  $("lib").querySelectorAll("input.lchk").forEach(cb=>{
+    cb.onchange=()=>{ cb.checked ? selLib.add(cb.dataset.repo) : selLib.delete(cb.dataset.repo); updateBatchBars(); };
+  });
+  updateBatchBars();
+}
+
 async function loadLib(){
   try{ const r=await fetch("/api/models",{headers:AUTH.headers()});
     if(r.status===401){ showAuth("需要访问口令"); return; }
@@ -645,39 +745,9 @@ async function loadLib(){
     libDeleting=del;
     $("libCount").textContent=(d.total||models.length)+" 个";
     if(!models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
-    libModels=models;
-    // 后端已按最近活动时间倒序返回; 超上限时明确提示, 不再静默截断
-    const trunc = d.truncated
-      ? '<div class="hint" style="margin-bottom:6px;color:var(--warn)">共 '+d.total+' 个模型，仅显示最近有活动的 '+models.length+' 个（上限 '+d.limit+'）</div>' : "";
-    const errKeys=Object.keys(derr);
-    const errBox = errKeys.length
-      ? '<div class="hint" style="margin-bottom:6px;color:var(--red)">删除未完成：'+errKeys.map(k=>esc(k)+' — '+esc(derr[k])).join('；')+'</div>' : "";
-    $("lib").innerHTML=trunc+errBox+models.map((m,i)=>{
-      const busy = !!del[m.repo];   // 正在删除(彻底删除耗时较长, 期间目录仍存在)
-      const st = busy ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 删除中</span>'
-               : m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:#1f5c38">✔ 完整</span>'
-               : m.state==="bad" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">⚠ 校验未过</span>'
-               : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 下载失败</span>'
-               : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 文件缺失</span>'
-               : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 校验中</span>'
-               : '<span class="tag">下载中/未校验</span>';
-      const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
-      const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
-      return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
-        fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
-                          :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
-        "</span><span class='lib-btn'>"+
-        "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
-        "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
-    }).join("");
-    // 批量勾选: 清理已不存在的模型, 绑定复选框
-    const repoSet = new Set(models.map(m=>m.repo));
-    [...selLib].forEach(x=>{ if(!repoSet.has(x)) selLib.delete(x); });
-    $("lib").querySelectorAll("input.lchk").forEach(cb=>{
-      cb.onchange=()=>{ cb.checked ? selLib.add(cb.dataset.repo) : selLib.delete(cb.dataset.repo); updateBatchBars(); };
-    });
-    updateBatchBars();
-    // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
+    libModels=models; libTrunc=trunc; libErrBox=errBox;
+    renderLibRows();
+    // 「补全元数据」    // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
     const bf = d.backfill || {};
     const unk = models.filter(m=>!m.total && !m.local_only).length;   // 本地自建目录查不到上游, 不算"待补全"
     const bb = $("btnBackfill");
@@ -799,11 +869,11 @@ $("btnLibCancel").onclick = () => {
   loadLib();
 };
 $("btnLibAll").onclick = () => {
-  const all = libModels || [];
+  const all = (libShown && libShown.length) ? libShown : (libModels||[]).map(m=>m.repo);
   const on = selLib.size < all.length;
   selLib.clear();
-  if(on) all.forEach(m=>selLib.add(m.repo));
-  loadLib();
+  if(on) all.forEach(r=>selLib.add(r));
+  renderLibRows();
 };
 $("btnBackfill").onclick = async () => {
   if(!confirm("为缺少元数据的模型补拉总量信息？\n\n仅请求一次仓库文件列表（不下载任何文件）。补全后「总量未知」会变成真实大小，分片池分配也更准确。")) return;
@@ -934,7 +1004,11 @@ function opsHtml(t,i,short){
   const delTxt = short ? "删除" : "删除任务";   // 列表视图列宽有限, 用短文案
   const delTitle = short ? " title='删除任务（可选是否连本地文件一起删）'" : "";
   const del = "<button class='btn sm del'"+delTitle+" onclick='removeTask("+i+")'>"+delTxt+"</button>";
-  if(isTaskDone(t) || t.exists === false) return del;   // 已完成/目录不存在: 暂停继续无意义, 只留删除
+  const openBtn = t.exists === false ? ""
+    : "<button class='btn sm' onclick='openTaskDir("+i+")'>"+(short ? "打开" : "打开目录")+"</button>";
+  // 已完成: 暂停/继续无意义, 留「打开目录」+「删除」; 目录不存在: 只剩删除
+  if(isTaskDone(t)) return openBtn + del;
+  if(t.exists === false) return del;
   return "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
          "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+del;
 }
@@ -992,6 +1066,7 @@ function taskCardHtml(d,t,i){
         "<span class='badge "+bd.cls+"'>"+bd.txt+"</span>"+
         "<span class='cname' title='"+escA(t.repo)+"　（点击复制本地路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</span>"+
         "<span class='cpct'>"+t.pct.toFixed(0)+"%</span>"+
+        "<button class='btn sm' title='在访达中打开所在文件夹' onclick='openTaskDir("+i+")'>打开</button>"+
         "<button class='expandbtn' onclick='toggleTaskExpand("+i+")'>展开</button>"+delBtn+
       "</div>"+
       "<div class='bar"+bc+"'><div style='width:"+t.pct+"%'></div></div>"+
@@ -1119,6 +1194,11 @@ function copyPath(i){
   if(!t) return;
   navigator.clipboard.writeText(t).then(()=>toast("✔ 本地路径已复制")).catch(()=>toast("复制失败", false));
 }
+async function openTaskDir(i){
+  const t=(lastTasks||[])[i]; if(!t) return;
+  const d=await post({action:"open_dir", dest:t.dest});
+  if(!d.ok) toast("打开失败："+d.error, false);
+}
 async function taskOp(action, i){
   const t=lastTasks[i]; if(!t) return;
   const d=await post({action, dest:t.dest});
@@ -1166,7 +1246,7 @@ function drawRate(hist,cur,free){
   const avg=rates.length?rates.reduce((a,b)=>a+b,0)/rates.length:0;
   const peak=rates.length?Math.max(...rates):0, max=Math.max(0.5,peak)*1.15, pad=3;
   $("rateStat").textContent="当前 "+(now?now.toFixed(1):"--")+" MB/s · 均 "+avg.toFixed(1)+" · 峰 "+peak.toFixed(1)+" MB/s"+(free?" · 盘余 "+fmtAuto(free):"");
-  x.strokeStyle="#1b2540"; x.beginPath(); x.moveTo(0,H-pad); x.lineTo(W,H-pad); x.stroke();
+  x.strokeStyle="var(--line)"; x.beginPath(); x.moveTo(0,H-pad); x.lineTo(W,H-pad); x.stroke();
   if(rates.length<2){ x.fillStyle="#8b96ad"; x.font="11px -apple-system,sans-serif"; x.fillText("采样中…",8,H/2); return; }
   const n=rates.length, sx=W/(n-1);
   const py=r=>H-pad-(r/max)*(H-2*pad);
@@ -1180,14 +1260,28 @@ function drawRate(hist,cur,free){
 
 // ---- 下载队列 ----
 let queued=[];
+let batchQueue=false, selQueue=new Set();
+function updateQueueBar(){
+  const bar=$("queueBatchBar"); if(bar) bar.style.display = batchQueue ? "flex" : "none";
+  if($("queueBatchInfo")) $("queueBatchInfo").textContent = "已选 " + selQueue.size + " 项";
+  if($("btnQueueRemove")) $("btnQueueRemove").disabled = selQueue.size === 0;
+  if($("btnQueueAll") && queued) $("btnQueueAll").textContent =
+    (queued.length && selQueue.size >= queued.length) ? "取消全选" : "全选";
+}
 function renderQueue(q){
   const card=$("queueCard"); q=q||[]; queued=q;
-  if(!q.length){ card.style.display="none"; return; }
+  if(!q.length){ card.style.display="none"; batchQueue=false; selQueue.clear(); updateQueueBar(); return; }
   card.style.display="";
+  [...selQueue].forEach(i=>{ if(i >= q.length) selQueue.delete(i); });   // 队列变短后清理越界选择
   $("queue").innerHTML=q.map((t,i)=>
-    "<div class='q-row'><span class='q-no'>#"+(i+1)+"</span><div class='qn'><b>"+esc(t.repo)+"</b><div class='hint'>"+
+    "<div class='q-row'>"+(batchQueue ? "<input type='checkbox' class='qchk' data-idx='"+i+"' "+(selQueue.has(i)?"checked":"")+">" : "")+
+    "<span class='q-no'>#"+(i+1)+"</span><div class='qn'><b>"+esc(t.repo)+"</b><div class='hint'>"+
     fmtAuto(t.total||0)+" · 每片"+t.x+"线程 · "+epName(t.endpoint)+" · "+esc(t.added_at||"")+"</div></div>"+
     "<button class='btn sm' onclick='removeQueue("+i+")'>移除</button></div>").join("");
+  $("queue").querySelectorAll("input.qchk").forEach(cb=>{
+    cb.onchange=()=>{ const i=+cb.dataset.idx; cb.checked ? selQueue.add(i) : selQueue.delete(i); updateQueueBar(); };
+  });
+  updateQueueBar();
 }
 async function removeQueue(i){
   const t=queued[i];
@@ -1320,6 +1414,47 @@ $("btnClearAuth").onclick = async () => {
 };
 $("authBtn").onclick = tryAuth;
 $("authInput").addEventListener("keydown", e => { if(e.key === "Enter") tryAuth(); });
+
+// ---- 主题：浅色 / 深色（存 localStorage，默认深色）----
+function applyTheme(t){
+  const light = (t === "light");
+  document.documentElement.setAttribute("data-theme", light ? "light" : "dark");
+  const b = $("btnTheme"); if(b) b.textContent = light ? "☀️ 浅色" : "🌙 深色";
+  try { localStorage.setItem("hfTheme", light ? "light" : "dark"); } catch(e){}
+}
+$("btnTheme").onclick = () =>
+  applyTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light");
+applyTheme((() => { try { return localStorage.getItem("hfTheme") || "dark"; } catch(e){ return "dark"; } })());
+
+// ---- 模型库搜索：只过滤显示，不改下标 ----
+$("libSearch").oninput = () => renderLibRows();
+
+// ---- 队列多选移除 ----
+$("btnBatchQueue").onclick = () => {
+  batchQueue = !batchQueue; selQueue.clear();
+  $("btnBatchQueue").className = batchQueue ? "btn sm primary" : "btn sm";
+  $("btnBatchQueue").textContent = batchQueue ? "多选中" : "多选";
+  renderQueue(queued);
+};
+$("btnQueueCancel").onclick = () => {
+  batchQueue = false; selQueue.clear();
+  $("btnBatchQueue").className = "btn sm"; $("btnBatchQueue").textContent = "多选";
+  renderQueue(queued);
+};
+$("btnQueueAll").onclick = () => {
+  const n = (queued||[]).length;
+  if(selQueue.size >= n) selQueue.clear(); else for(let i=0;i<n;i++) selQueue.add(i);
+  renderQueue(queued);
+};
+$("btnQueueRemove").onclick = async () => {
+  const idx = [...selQueue];
+  if(!idx.length) return;
+  if(!confirm("从下载队列移除 " + idx.length + " 个待下载任务？\n\n只删队列记录，不影响正在下载的任务，也不删除任何文件。")) return;
+  const d = await post({action:"queue_remove_many", indexes:idx});
+  if(!d.ok){ toast("移除失败：" + d.error, false); return; }
+  selQueue.clear(); renderQueue(d.queue);
+  toast("✔ 已移除 " + d.removed + " 个队列任务");
+};
 
 refresh(); loadLib(); loadAuthState();
 let statTO;

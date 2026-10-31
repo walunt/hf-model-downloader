@@ -2,7 +2,7 @@
 """通用 HuggingFace 模型下载器 v2.0: 本地看板 + 控制台 (http://localhost:8765, http/https 双协议)
 v2.0: 多任务并发下载 — tasks 列表(最多 max_models 个同时下载) + 全局分片池(global_j)自动/手动分配
 """
-import json, os, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes, hmac, secrets
+import json, os, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes, hmac, secrets, traceback
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -38,6 +38,21 @@ def _own_ips():
 
 OWN_IPS = _own_ips()
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "::1"} | set(OWN_IPS)
+_hosts_checked = [time.time()]
+
+def refresh_hosts(force=False):
+    """定期重探本机 IPv4: 路由器重新分配 IP / 笔记本换网后无需重启服务即可用新地址访问"""
+    global OWN_IPS, ALLOWED_HOSTS
+    now = time.time()
+    if not force and now - _hosts_checked[0] < 60: return False
+    _hosts_checked[0] = now
+    ips = _own_ips()
+    if ips != OWN_IPS:
+        OWN_IPS = ips
+        ALLOWED_HOSTS = {"localhost", "127.0.0.1", "::1"} | set(ips)
+        print("[网络] 本机地址已变化 -> %s" % (", ".join(ips) or "(无)"), flush=True)
+        return True
+    return False
 LOCAL_CLIENTS = ("127.0.0.1", "::1")
 ENDPOINTS = {"mirror": "https://hf-mirror.com", "direct": "https://huggingface.co"}
 # 仅作为无法追踪进程组时的兜底(兼容早期任务); 正常走 killpg 精确停止本任务进程组
@@ -72,6 +87,30 @@ if _cfg.get("alloc_mode") == "auto": _cfg["alloc_mode"] = "size"
 for t in _cfg.get("queue", []):
     t.setdefault("added_at", time.strftime("%F %T"))
 
+def _log_exc(where):
+    """被吞掉的异常打到 server.log(带堆栈): 线程不能因异常退出, 但必须留下排查线索"""
+    print("[异常] %s\n%s" % (where, traceback.format_exc().rstrip()), flush=True)
+
+# ---------- 日志轮转: 长期运行也不胀满磁盘 ----------
+LOG_MAX = 20 * 1024 * 1024   # 超过 20MB 触发
+LOG_KEEP = 4 * 1024 * 1024   # 只保留最后 4MB
+def rotate_log(path, max_bytes=LOG_MAX, keep_bytes=LOG_KEEP):
+    try:
+        sz = os.path.getsize(path)
+    except OSError:
+        return False
+    if sz <= max_bytes: return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, sz - keep_bytes)); data = f.read()
+        with open(path, "wb") as f:
+            f.write("[... 日志已轮转, 以下为最近部分 ...]\n".encode("utf-8") + data)
+        print("[日志] 已轮转 %s：%.1fMB -> %.1fMB" % (os.path.basename(path), sz / 1e6, len(data) / 1e6), flush=True)
+        return True
+    except OSError as e:
+        print("[日志] 轮转失败 %s：%s" % (path, e), flush=True)
+        return False
+
 def save_cfg():
     """原子写: 先写临时文件再 replace, 避免写一半崩溃损坏配置"""
     try:
@@ -79,8 +118,8 @@ def save_cfg():
         with open(tmp, "w") as f:
             json.dump(_cfg, f, ensure_ascii=False, indent=2)
         os.replace(tmp, CFG_F)
-    except OSError:
-        pass
+    except OSError as e:
+        print("[配置] 保存失败(改动可能只在内存): %s" % e, flush=True)
 
 def read_token():
     try: return open(os.path.expanduser("~/.huggingface/token")).read().strip()
@@ -190,13 +229,30 @@ def stop_task(t=None):
     pgid = (t or {}).get("pgid")
     if not _pg_alive(pgid): return
     try: os.killpg(pgid, signal.SIGTERM)
-    except Exception: pass
+    except Exception as e: print("[停止] SIGTERM 失败 pgid=%s: %s" % (pgid, e), flush=True)
     time.sleep(2.5)
     if _pg_alive(pgid):
         try: os.killpg(pgid, signal.SIGKILL)
-        except Exception: pass
+        except Exception as e: print("[停止] SIGKILL 失败 pgid=%s: %s" % (pgid, e), flush=True)
+
+def stop_tasks_batch(tasks):
+    """批量停止: 所有存活进程组同时 SIGTERM, 只等一次 2.5s 宽限再统一 SIGKILL。
+    逐个 stop_task 会各自 sleep 2.5s(5 个任务最坏 12.5s 阻塞请求), 这里把等待合并成一次。"""
+    pgids = [t.get("pgid") for t in tasks if t and _pg_alive(t.get("pgid"))]
+    if not pgids: return 0
+    for pg in pgids:
+        try: os.killpg(pg, signal.SIGTERM)
+        except Exception as e: print("[批量停止] SIGTERM 失败 pgid=%s: %s" % (pg, e), flush=True)
+    time.sleep(2.5)
+    for pg in [x for x in pgids if _pg_alive(x)]:
+        try: os.killpg(pg, signal.SIGKILL)
+        except Exception as e: print("[批量停止] SIGKILL 失败 pgid=%s: %s" % (pg, e), flush=True)
+    return len(pgids)
 
 def launch(t):
+    rotate_log(LOG)                                                   # 主下载日志
+    rotate_log(os.path.join(t["dest"], ".hfd", "download.log"),       # 该任务的 aria2 日志
+               max_bytes=8 * 1024 * 1024, keep_bytes=2 * 1024 * 1024)
     env = os.environ.copy()
     env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + env.get("PATH", "")
     env["REPO"] = t["repo"]; env["DEST"] = t["dest"]
@@ -654,13 +710,22 @@ def handle_control(data, local=False):
             save_cfg()
             need_fill = len([t for t in tasks.values() if t.get("want_run")]) < max(1, int(_cfg.get("max_models") or 1))
             tail_ret = {"ok": True, "queue": list(q), "need_fill": need_fill}
-        elif action in ("queue_remove", "queue_clear"):
-            if action == "queue_clear": q.clear()
+        elif action in ("queue_remove", "queue_clear", "queue_remove_many"):
+            if action == "queue_clear":
+                n_rm = len(q); q.clear()
+            elif action == "queue_remove_many":
+                # 批量移除: 索引倒序删, 避免删完一个后面全部位移
+                idxs = sorted({int(i) for i in (data.get("indexes") or [])
+                               if isinstance(i, (int, float)) and 0 <= int(i) < len(q)}, reverse=True)
+                n_rm = 0
+                for i in idxs: q.pop(i); n_rm += 1
             else:
                 idx = data.get("index")
-                if isinstance(idx, int) and 0 <= idx < len(q): q.pop(idx)
+                n_rm = 0
+                if isinstance(idx, int) and 0 <= idx < len(q): q.pop(idx); n_rm = 1
             save_cfg()
-            tail_ret = {"ok": True, "queue": q}
+            if n_rm: print("[队列] 移除 %d 个待下载任务, 剩余 %d" % (n_rm, len(q)), flush=True)
+            tail_ret = {"ok": True, "queue": q, "removed": n_rm}
         else:
             # 任务操作: 按 dest 定位
             dest = expand((data.get("dest") or "").strip())
@@ -820,7 +885,7 @@ def _sampler():
                 _rate_hist.append((round(now, 1), round(rate, 1)))
                 _task_rates.clear(); _task_rates.update(rates)
         except Exception:
-            pass
+            _log_exc("速率采样线程")
         time.sleep(SAMPLE_SEC)
 threading.Thread(target=_sampler, daemon=True).start()
 
@@ -856,6 +921,8 @@ def _queue_watcher():
     while True:
         time.sleep(8)
         try:
+            refresh_hosts()      # 路由器换 IP / 换网后无需重启(内部限流 60s)
+            rotate_log(LOG)      # 长期运行不胀满磁盘
             launch_list = []
             dirty = False  # 仅在有实际状态变化时落盘, 避免无任务时也每 8s 重写配置
             with _cfg_lock:
@@ -908,7 +975,7 @@ def _queue_watcher():
                 launch(t)
             first = False
         except Exception:
-            pass
+            _log_exc("队列看护线程")
 threading.Thread(target=_queue_watcher, daemon=True).start()
 
 # ---------------- 磁盘实时预检(所有运行任务总量) ----------------
@@ -938,7 +1005,7 @@ def _disk_watcher():
                       'display notification "剩余可用 ' + ("%.1f" % (free / 1e9)) + 'GB 不足, 已自动暂停; 清理磁盘后可点「继续」" with title "HF 模型下载器" subtitle "磁盘空间不足"'])
                 print("[磁盘预检] 空间不足, 已暂停 %d 个任务" % len(act), flush=True)
         except Exception:
-            pass
+            _log_exc("磁盘预检线程")
 threading.Thread(target=_disk_watcher, daemon=True).start()
 
 # ---------------- 日志增量追踪 ----------------
@@ -1108,7 +1175,7 @@ def _start_delete_model(repo, mode):
     threading.Thread(target=_delete_worker, args=(dest, repo, mode), daemon=True).start()
     return True, dest
 
-def _remove_one_task(dest, mode="trash"):
+def _remove_one_task(dest, mode="trash", stopped=False):
     """移除单个任务, 并按 mode 处理本地目录: keep=保留 / trash=废纸篓 / purge=彻底删除。
     顺序铁律: 先删条目落盘 -> 停进程组 -> 再动目录(否则 aria2 边写边删会产生残缺文件)。"""
     with _cfg_lock:
@@ -1116,7 +1183,7 @@ def _remove_one_task(dest, mode="trash"):
         if task is None: return False, "任务不存在"
         task["want_run"] = False
         save_cfg()
-    stop_task(task)
+    if not stopped: stop_task(task)   # 批量删除已统一停过进程组, 不再逐个等 2.5s
     _task_state.pop(dest, None)
     with _slock:
         _task_sample.pop(dest, None); _task_rates.pop(dest, None)
@@ -1144,15 +1211,30 @@ def _remove_one_task(dest, mode="trash"):
     return True, detail
 
 def _batch_tasks(op, dests, mode="trash"):
-    """批量 暂停/继续/删除。逐个执行, 单个失败不影响其余, 失败原因逐条回报。"""
+    """批量 暂停/继续/删除。单个失败不影响其余, 失败原因逐条回报。
+    进程操作统一用 stop_tasks_batch: 一次 SIGTERM + 一次等待, 避免 N×2.5s 阻塞请求。"""
     done, failed, actions = 0, [], []
-    for dest in dests:
-        try:
-            if op == "remove":
-                okr, detail = _remove_one_task(dest, mode)
+
+    # 删除: 先批量停掉所有运行中的目标, 再逐个移除(目录处理仍是逐个, 但不再重复等待)
+    if op == "remove":
+        with _cfg_lock:
+            snap = [_cfg.get("tasks", {}).get(d) for d in dests]
+        alive = [t for t in snap if t and _pg_alive(t.get("pgid"))]
+        if alive:
+            stop_tasks_batch(alive)
+            print("[批量删除] 已停止 %d 个运行中的任务" % len(alive), flush=True)
+        for dest in dests:
+            try:
+                okr, detail = _remove_one_task(dest, mode, stopped=True)
                 if okr: done += 1
                 else: failed.append({"dest": dest, "error": detail})
-                continue
+            except Exception as e:
+                failed.append({"dest": dest, "error": str(e)})
+        _fill_queue()
+        return {"ok": True, "op": op, "done": done, "total": len(dests), "failed": failed}
+
+    for dest in dests:
+        try:
             with _cfg_lock:
                 t = _cfg.get("tasks", {}).get(dest)
                 if t is None: raise RuntimeError("任务不存在")
@@ -1171,9 +1253,11 @@ def _batch_tasks(op, dests, mode="trash"):
             done += 1
         except Exception as e:
             failed.append({"dest": dest, "error": str(e)})
-    for a, t in actions:            # 进程操作放锁外
-        if a == "stop": stop_task(t)
-        else: launch(t)
+
+    stops = [t for a, t in actions if a == "stop"]
+    starts = [t for a, t in actions if a == "start"]
+    if stops: stop_tasks_batch(stops)      # 批量暂停也只等一次
+    for t in starts: launch(t)
     if op != "start": _fill_queue()
     return {"ok": True, "op": op, "done": done, "total": len(dests), "failed": failed}
 
