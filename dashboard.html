@@ -108,7 +108,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.26 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.27 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -242,7 +242,7 @@
 
   <!-- 本地模型库 -->
   <div class="card">
-    <h2>本地模型库 <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
+    <h2>本地模型库 <span class="badge" id="libCount">--</span> <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
     <div id="lib"><span class="hint">读取中…</span></div>
   </div>
 
@@ -396,12 +396,18 @@ $("speedQuick").onchange=()=>{ if($("speedQuick").value!==""){ $("setSpeed").val
 let libModels=[];
 async function loadLib(){
   try{ const r=await fetch("/api/models"); const d=await r.json();
-    if(!d.models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
-    libModels=d.models;
-    $("lib").innerHTML=d.models.map((m,i)=>{
+    const models=d.models||[];
+    $("libCount").textContent=(d.total||models.length)+" 个";
+    if(!models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
+    libModels=models;
+    // 后端已按最近活动时间倒序返回; 超上限时明确提示, 不再静默截断
+    const trunc = d.truncated
+      ? '<div class="hint" style="margin-bottom:6px;color:var(--warn)">共 '+d.total+' 个模型，仅显示最近有活动的 '+models.length+' 个（上限 '+d.limit+'）</div>' : "";
+    $("lib").innerHTML=trunc+models.map((m,i)=>{
       const st = m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:#1f5c38">✔ 完整</span>'
                : m.state==="bad" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">⚠ 校验未过</span>'
                : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 下载失败</span>'
+               : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 文件缺失</span>'
                : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 校验中</span>'
                : '<span class="tag">下载中/未校验</span>';
       const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";

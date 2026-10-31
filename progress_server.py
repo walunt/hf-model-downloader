@@ -15,6 +15,8 @@ WINDOW_SEC, SAMPLE_SEC = 30, 5
 RATE_HIST_MAX = 360  # 5s 一个点, 保留 30 分钟速率历史用于曲线图
 MAX_CONN = 10        # hfd.sh 的 -x/-j 上限, 前后端共用此约束
 MAX_MODELS_LIMIT = 5 # 最大同时下载模型数上限
+MAX_MODELS_LIST = 200 # 模型库单次返回上限(防超大目录拖慢接口); 超限时接口返回 truncated, 由前端明确提示
+CACHE_DIRS = ("_hf-cache",)  # hfd/HF Hub 缓存目录, 不是模型本体, 模型库需跳过
 ENDPOINTS = {"mirror": "https://hf-mirror.com", "direct": "https://huggingface.co"}
 # 仅作为无法追踪进程组时的兜底(兼容早期任务); 正常走 killpg 精确停止本任务进程组
 # 模式用 [x] 技巧避免 pgrep -f 匹配到自身(pgrep 进程自己的命令行也含该串), 否则无真进程时误报"运行中"
@@ -310,7 +312,7 @@ def _fill_queue():
             tasks[nxt["dest"]] = t
             launch_list.append(t)
         allocate_j()
-        save_cfg()
+        if launch_list: save_cfg()  # 无补位则配置未变, 不写盘(allocate_j 内部已按变化自行保存)
     for t in launch_list:
         launch(t)
 
@@ -715,6 +717,7 @@ def _queue_watcher():
         time.sleep(8)
         try:
             launch_list = []
+            dirty = False  # 仅在有实际状态变化时落盘, 避免无任务时也每 8s 重写配置
             with _cfg_lock:
                 tasks = _cfg.get("tasks", {}); q = _cfg.get("queue", [])
                 # 1) 逐任务检查
@@ -725,6 +728,7 @@ def _queue_watcher():
                         t["want_run"] = False
                         t["last_msg"] = time.strftime("%T") + " 已完成"
                         _task_state.pop(dest, None)
+                        dirty = True
                         print("[队列] 任务完成:", t["repo"], flush=True)
                         _run(["osascript", "-e",
                               'display notification "下载完成: ' + t["repo"] + '" with title "HF 模型下载器" subtitle "已校验通过"'])
@@ -754,10 +758,11 @@ def _queue_watcher():
                               started_at=time.strftime("%F %T"), last_msg="队列自动开始")
                     tasks[nxt["dest"]] = nt
                     launch_list.append(nt)
+                    dirty = True
                     print("[队列] 补位开始:", nxt["repo"], flush=True)
-                # 3) 分配分片
-                allocate_j()
-                save_cfg()
+                # 3) 分配分片(allocate_j 内部仅在有变化时写盘, 这里只补记队列/完成态变化)
+                if allocate_j(): dirty = True
+                if dirty: save_cfg()
             # 锁外: 补位/中断恢复的任务启动; 分片变化的任务重启生效
             for t in launch_list:
                 launch(t)
@@ -838,10 +843,14 @@ def tail_lines(path, n=14, max_bytes=512 * 1024):
 
 # ---------------- 本地模型库 ----------------
 def list_models():
+    """列出本地模型库: 按最近活动时间倒序(有元数据用其 mtime, 否则用目录 mtime)。
+    不再静默截断——超过 MAX_MODELS_LIST 时返回 truncated/total, 由前端明确提示"未全部显示"。"""
     root = expand(_cfg["default_root"]); out = []
-    if not os.path.isdir(root): return out
+    if not os.path.isdir(root):
+        return {"models": [], "total": 0, "truncated": False, "limit": MAX_MODELS_LIST}
     try: orgs = sorted(os.listdir(root))
-    except OSError: return out
+    except OSError:
+        return {"models": [], "total": 0, "truncated": False, "limit": MAX_MODELS_LIST}
     for org in orgs:
         op = os.path.join(root, org)
         if not os.path.isdir(op) or org.startswith("."): continue
@@ -850,10 +859,14 @@ def list_models():
         for name in names:
             d = os.path.join(op, name)
             if not os.path.isdir(d) or name.startswith("."): continue
+            if name in CACHE_DIRS: continue   # 缓存目录不计入模型库
             tot, _, _ = metadata(d)
             bytes_ = scan(d)[0]
             v = verify_result(d)
-            if v:
+            if v and bytes_ == 0 and (v.get("total") or 0) > 0:
+                # 校验记录只是历史快照: 目录里已无权重文件(被删除/移走)时不能继续显示"完整"
+                state = "missing"
+            elif v:
                 state = "ok" if not v.get("bad") and not v.get("miss") and v.get("ok") == v.get("total") else "bad"
             else:
                 # 无校验结果时读取下载脚本的阶段标记: 明确失败/校验中的模型不能误标"下载中"
@@ -861,12 +874,22 @@ def list_models():
                 state = "failed" if ph == "failed" else ("verifying" if ph == "verifying" else "partial")
             dt = ""
             mp = os.path.join(d, ".hfd", "repo_metadata.json")
+            try:
+                # 活动时间取元数据 mtime(下载/续传都会刷新), 无元数据退回目录 mtime, 供倒序排列
+                mtime = os.path.getmtime(mp) if os.path.exists(mp) else os.path.getmtime(d)
+            except OSError:
+                mtime = 0
             if os.path.exists(mp):
-                dt = time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(mp)))
+                dt = time.strftime("%m-%d %H:%M", time.localtime(mtime))
             out.append({"repo": f"{org}/{name}", "bytes": bytes_, "total": tot,
                         "pct": min(100.0, bytes_ / tot * 100) if tot else 0,
-                        "state": state, "date": dt, "verify": v})
-    return out[-30:]
+                        "state": state, "date": dt, "verify": v, "_mtime": mtime})
+    out.sort(key=lambda m: -m["_mtime"])   # 最近有活动的排前面
+    total = len(out)
+    shown = out[:MAX_MODELS_LIST]
+    for m in shown: m.pop("_mtime", None)
+    return {"models": shown, "total": total,
+            "truncated": total > MAX_MODELS_LIST, "limit": MAX_MODELS_LIST}
 
 def status_json():
     tasks = _cfg.get("tasks", {})
@@ -928,7 +951,7 @@ class Handler(BaseHTTPRequestHandler):
         super().handle_error(request, client_address)
     def do_GET(self):
         if self.path == "/api/status": self._send(status_json())
-        elif self.path == "/api/models": self._send({"models": list_models()})
+        elif self.path == "/api/models": self._send(list_models())
         elif self.path == "/" or self.path.startswith("/index"):
             with open(os.path.join(PROJ, "dashboard.html"), "rb") as f: self._send(f.read(), "text/html; charset=utf-8")
         else:

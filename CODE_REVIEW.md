@@ -186,3 +186,19 @@
 
 ## 二十六、v2.26 调整记录（最近任务标题简化）
 - 「最近任务」卡片标题去掉括号内的功能说明，仅保留「最近任务」（三个按钮本身仍保留在每行右侧）。
+
+## 二十七、v2.27 调整记录（技术债清理与加固）
+
+本轮针对代码审查中遗留的 4 项技术债逐条处理，全部为「不改行为、只消除隐患」的加固性修改。
+
+1. **源码目录残留测试配置（清理）**：源码目录的 `dl_config.json` 是早期单元测试产物（`default_root=/tmp/v2root`，history 为 `m/m`、`n/n`），与运行时权威配置无关但存在被误用风险——按 README「方式三」在源码目录直接 `python3 progress_server.py` 时，会把这个脏配置当成默认根目录。已删除；配置文件在服务启动时按默认值自动重建。运行时目录（`~/Library/Application Support/hf-model-downloader/dl_config.json`）未受影响。
+2. **模型库静默截断（修复）**：`list_models()` 原为 `return out[-30:]`——既有硬编码 30 条上限，又是按组织名字典序取尾 30 个，模型超过 30 个时会**无任何提示地丢条目**，且看到的不一定是最近使用的。改为：按最近活动时间倒序（有 `repo_metadata.json` 用其 mtime，否则用目录 mtime），上限提升到常量 `MAX_MODELS_LIST=200`，返回结构扩为 `{models, total, truncated, limit}`；前端标题显示总数，超限时显式提示「共 N 个，仅显示最近 200 个」。接口由 `{"models": list_models()}` 改为直接返回 `list_models()`。
+3. **死文件清理（清理）**：
+   - `control_state.json`：全项目零引用的 v1 遗留状态文件（含过期 pid），已删除；`.gitignore` 中保留该条目作为旧副本的防御。
+   - `download_dsv4_vision.sh`：已被通用脚本取代的一次性专用脚本（硬编码仓库名与 156GB 阈值），`git mv` 归档到 `legacy/`，并新增 `legacy/README.md` 说明；README 文件表同步更新。
+4. **watcher 无谓写盘（优化）**：`_queue_watcher` 每 8 秒无条件执行 `save_cfg()`，即使没有任何任务、配置毫无变化也重写整份 JSON 并 `os.replace`（约 1 万次/天无谓磁盘写入）。改为 `dirty` 标记：仅在「任务完成置 want_run=False」「队列补位」「分片分配实际变化（`allocate_j()` 有返回值）」时落盘。`_fill_queue()` 同步收紧为仅在有补位时才保存。
+
+**本轮回归中顺带发现并修复的 2 个真实缺陷**（同一迭代内处理，不影响 v2.27 版本号）：
+
+5. **模型库谎报「完整」（修复）**：`mlx-community/Kimi-Dev-72B-4bit-DWQ` 目录内只剩 `.hfd/` 元数据（权重文件已不在，实测 `du` 仅 32K），但因 `.hfd/verify_result.json` 留有历史校验记录（ok 9/9），页面显示「✔ 完整 0GB / 40.92GB」。校验结果只是**历史快照**，不能代表当前磁盘状态。新增判定：有校验记录但实际占用为 0 且元数据 total>0 → `state="missing"`，前端显示红色「✕ 文件缺失」，与「下载失败」区分（前者是文件被删除/移走，后者是下载失败）。
+6. **缓存目录误入模型库（修复）**：`ocr-models/_hf-cache`（HF Hub 缓存，含 `hub/` 与 `.agent_harnesses.json`）被当作 0 字节模型列出。新增常量 `CACHE_DIRS=("_hf-cache",)` 精确跳过——不用「下划线开头」这种宽泛规则，避免误伤合法仓库名。
