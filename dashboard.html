@@ -27,6 +27,7 @@
   :root {
     --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad;
     --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b;
+    --verify:#2fd3e0;   /* 校验相关(浅色主题换成深色版保证可读) */
     /* 表面层(浅色主题整体替换) */
     --card2:#141b2b;    /* 任务卡 / 批量栏 */
     --inset:#0c1120;    /* 进度条槽 */
@@ -45,6 +46,7 @@
   html[data-theme="light"] {
     --bg:#f2f5fa; --card:#ffffff; --line:#dde3ee; --txt:#1a2233; --dim:#68738a;
     --acc:#2f6bff; --ok:#1f8a4c; --warn:#a1650f; --red:#c33a50;
+    --verify:#0f7480;
     --card2:#ffffff; --inset:#e9edf5; --inset2:#f5f7fb; --line2:#e4e9f2;
     --hover:#eef2f9; --input:#ffffff; --shadow:rgba(24,36,60,.16);
     --bd-ok:#a6d8bd; --bg-ok:#eaf7ef;
@@ -333,7 +335,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.43 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.44 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -713,8 +715,8 @@ function libRow(m, i, del){
            : m.state==="downloading" ? '<span class="tag" style="color:var(--acc);border-color:var(--bd-live)">◌ 下载中</span>'
            : m.state==="queued" ? '<span class="tag" style="color:var(--acc);border-color:var(--bd-live)">◌ 等待下载</span>'
            : m.local_only ? '<span class="tag">● 本地目录</span>'
-           // 已下完 100% 只是没校验过: 用中性色(非警告色), 与「不完整」拉开区分度
-           : (m.total && m.pct >= 99.99) ? '<span class="tag">● 待校验</span>'
+           // 已下完 100% 只是没校验过: 用青色(与下载列表"校验中"同色系), 与「不完整」的黄区分开
+           : (m.total && m.pct >= 99.99) ? '<span class="tag" style="color:var(--verify);border-color:var(--bd-verify)">● 待校验</span>'
            // partial = 没下完且不在下载任务里(中断 / 任务记录被删 / 只有部分文件)
            : '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">⚠ 不完整</span>';
   const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
@@ -727,6 +729,9 @@ function libRow(m, i, del){
     fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
                       :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
     "</span><span class='lib-btn'>"+
+    // 不完整 / 校验未过 / 下载失败: 给「继续下载」(断点续传, 参数用当前默认)
+    ((m.state==="partial" || m.state==="bad" || m.state==="failed") && !busy
+      ? "<button class='btn sm' onclick='resumeModelDownload("+i+")'>继续下载</button> " : "")+
     "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
     "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
 }
@@ -1212,6 +1217,15 @@ function copyPath(i){
   const t=(lastTasks[i]||{}).dest;
   if(!t) return;
   navigator.clipboard.writeText(t).then(()=>toast("✔ 本地路径已复制")).catch(()=>toast("复制失败", false));
+}
+// 继续下载: 用当前默认参数(线程数/下载源)重新入队, 断点续传。
+// 下载脚本会先做"续传预检"——已存在但 sha256 不符的文件会被删掉重下, 避免带着错误继续。
+async function resumeModelDownload(i){
+  const m=(libModels||[])[i]; if(!m) return;
+  const d=await post({action:"enqueue", repo:m.repo, dest:m.dest});
+  if(!d.ok){ toast("无法继续下载："+d.error, false); return; }
+  toast("✔ 已重新加入下载队列（断点续传，先校验已下载部分）");
+  refresh(); loadLib();
 }
 async function openModelDir(i){
   const m=(libModels||[])[i]; if(!m) return;

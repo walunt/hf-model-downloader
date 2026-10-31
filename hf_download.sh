@@ -60,6 +60,69 @@ done
 
 # ---------- 下载(失败自动重试: 首次 + 最多 3 次重试, 指数退避 30/60/120s) 或 仅校验模式 ----------
 mkdir -p "$DEST"
+
+# ---------- 续传预检: 先校验已下载部分, 坏掉的删掉让 aria2c 重新下 ----------
+# aria2c 续传只比对文件大小: 大小已满但内容损坏的文件会被判定"已完成"而跳过,
+# 于是错误要拖到最后的整包校验才暴露(白跑几小时)。这里在下载前先扫一遍:
+#   大小不足              → 未下完, 保留(aria2c 会续传, 删掉等于白下)
+#   大小已满但 sha256 不符 → 损坏, 删除后重新下载
+# 可用 HFD_PRECHECK=0 关闭(确认本地文件都完好时, 可跳过这段校验时间)
+if [ "${HFD_PRECHECK:-1}" = "1" ] && [ -f "$DEST/.hfd/repo_metadata.json" ]; then
+  echo "[预检] 校验已下载部分(仅比对已下满的文件), 损坏的会删除后重新下载 ..."
+  python3 - "$DEST" <<'PYCHECK' || echo "[预检] 预检未正常完成, 忽略并继续下载"
+import json, os, sys, hashlib, time
+dest = sys.argv[1]
+meta = os.path.join(dest, ".hfd", "repo_metadata.json")
+try:
+    with open(meta) as f: data = json.load(f)
+except Exception as e:
+    print("[预检] 元数据读取失败, 跳过:", e); sys.exit(0)
+expect = {}
+for sib in data.get("siblings", []):
+    lfs = (sib.get("lfs") or {})
+    name = sib.get("rfilename")
+    if not name: continue
+    size = sib.get("size") or lfs.get("size") or 0
+    expect[name] = (lfs.get("sha256") or "", int(size or 0))
+if not expect:
+    print("[预检] 元数据无文件条目, 跳过"); sys.exit(0)
+# 只处理"已下满"的文件: 大小不足的是正常断点, 交给 aria2c 续传, 不能删
+full = []
+for name, (sha, size) in expect.items():
+    p = os.path.join(dest, name)
+    if not os.path.exists(p): continue
+    try: cur = os.path.getsize(p)
+    except OSError: continue
+    if size > 0 and cur != size: continue      # 未下满 → 跳过
+    if not sha: continue                        # 无 sha256 可比对 → 跳过
+    full.append((name, p, sha))
+print("[预检] 已下满待比对 %d 个 / 共 %d 个文件" % (len(full), len(expect)))
+removed = kept = 0
+t0 = time.time()
+for i, (name, p, sha) in enumerate(sorted(full), 1):
+    h = hashlib.sha256()
+    try:
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+                h.update(chunk)
+    except OSError as e:
+        print("[预检] 读取失败 %s: %s" % (name, e)); continue
+    if h.hexdigest() == sha:
+        kept += 1
+    else:
+        try:
+            os.remove(p); removed += 1
+            print("[预检] 损坏已删除(将重新下载): %s" % name)
+        except OSError as e:
+            print("[预检] 无法删除 %s: %s" % (name, e))
+    if i % 10 == 0 or i == len(full):
+        print("[预检] 进度 %d/%d (%.0fs)" % (i, len(full), time.time() - t0))
+print("[预检] 完成: 完好 %d 个, 删除重下 %d 个, 耗时 %.0fs"
+      % (kept, removed, time.time() - t0))
+sys.exit(0)
+PYCHECK
+fi
+
 if [ "${HFD_VERIFY_ONLY:-0}" = "1" ]; then
   echo "[校验] 仅校验模式(不下载), 直接比对已下载文件的 sha256 ..."
 else
