@@ -2,7 +2,7 @@
 """通用 HuggingFace 模型下载器 v2.0: 本地看板 + 控制台 (http://localhost:8765, http/https 双协议)
 v2.0: 多任务并发下载 — tasks 列表(最多 max_models 个同时下载) + 全局分片池(global_j)自动/手动分配
 """
-import json, os, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes, hmac, secrets, traceback
+import json, os, sys, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes, hmac, secrets, traceback
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
