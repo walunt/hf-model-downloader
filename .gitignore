@@ -1,0 +1,22 @@
+# ---------- 运行时状态（含本机路径与任务历史，首次启动自动生成）----------
+dl_config.json
+control_state.json
+
+# ---------- 日志 ----------
+*.log
+server.log
+download.log
+
+# ---------- 本地自签名证书与私钥（不纳入版本库）----------
+localhost.key
+localhost.crt
+
+# ---------- 含个人环境信息的开发文档 ----------
+项目开发进度.md
+
+# ---------- macOS ----------
+.DS_Store
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
