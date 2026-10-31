@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>HuggingFace 模型下载器</title>
 <style>
   :root { --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad; --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b; }
@@ -114,9 +114,68 @@
   #toast.show{opacity:1;}
   #toast.ok{color:var(--ok);border-color:#1f5c38;}
   #toast.bad{color:var(--red);border-color:#5c2230;}
+  /* ---------- 移动端（≤640px：iPhone 竖屏，430×932）---------- */
   @media (max-width:640px){
+    body {
+      padding:10px;
+      padding-left:calc(10px + env(safe-area-inset-left));
+      padding-right:calc(10px + env(safe-area-inset-right));
+      padding-bottom:calc(10px + env(safe-area-inset-bottom));
+    }
+    h1 { font-size:16px; line-height:1.6; }
+    .ver { display:inline-block; margin-left:0; margin-top:2px; }
+    .sub { font-size:11px; margin-bottom:14px; }
+    .card { padding:14px 12px; border-radius:10px; margin-bottom:12px; }
+    h2 { flex-wrap:wrap; gap:6px; }
+    /* iOS 聚焦时字号 <16px 会自动放大页面, 故移动端统一 16px */
+    input[type=text], input[type=number], select { font-size:16px; padding:9px 10px; }
+    .btn { padding:10px 14px; font-size:14px; min-height:42px; }
+    .btn.sm { padding:8px 10px; font-size:13px; min-height:36px; }
+    .row { gap:8px; }
+    .grow { flex:1 1 100%; }
+    #analyzeEp { flex:1 1 auto; }
     .grid, .info .kv { grid-template-columns:repeat(2,1fr); }
-    body { padding:14px; } .card { padding:14px; }
+    .info .kv { gap:6px; }
+    /* 任务卡片 */
+    .task { padding:12px; }
+    .top { flex-wrap:wrap; gap:6px; }
+    .repo { font-size:14px; }
+    /* 徽标另起一行, 避免挂在长模型名换行处 */
+    .task .repo .badge { display:block; width:fit-content; margin-left:0!important; margin-top:5px; }
+    .pct { font-size:26px; }
+    .stat { margin-left:0; text-align:left; font-size:11px; }
+    /* 本地路径单行省略, 省出纵向空间 */
+    .task .hint[onclick] { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; word-break:normal; }
+    .vbar { font-size:11px; }
+    .files .n { white-space:normal; word-break:break-all; }
+    /* 列表/卡片切换占满整行, 点击区域更大 */
+    .viewswitch { margin-left:0; width:100%; margin-top:4px; }
+    .viewswitch button { flex:1; padding:9px 0; font-size:13px; }
+    /* 历史 / 队列 / 模型库行允许换行 */
+    .hist-row, .q-row, .lib-item { flex-wrap:wrap; gap:6px; }
+    .hist-row .hr, .q-row .qn, .lib-item .lib-name { flex:1 1 100%; }
+    .lib-item .lib-meta { text-align:left; }
+    /* 列表视图: 表格转堆叠块, 避免横向滚动 */
+    .tblwrap { overflow:visible; }
+    #taskTable { min-width:0; }
+    #taskTable thead { display:none; }
+    #taskTable, #taskTable tbody, #taskTable tr, #taskTable td { display:block; width:auto; }
+    #taskTable tr { border-bottom:1px solid var(--line); padding:10px 0; }
+    #taskTable tbody tr:last-child { border-bottom:none; }
+    #taskTable td { border:none; padding:2px 0; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    #taskTable td[data-l]::before { content:attr(data-l); color:var(--dim); font-size:11px; flex:0 0 auto; }
+    #taskTable td.c-model { display:block; }
+    #taskTable td.c-model::before { display:none; }
+    #taskTable td.c-prog { display:block; }
+    #taskTable td.c-prog::before { content:'进度'; display:block; color:var(--dim); font-size:11px; margin-bottom:3px; }
+    #taskTable td.c-model .rname { font-size:14px; }
+    #taskTable td.c-prog .prow { margin-top:0; }
+    #taskTable td.opscell { justify-content:flex-end; padding-top:8px; }
+    #taskTable td.opscell::before { display:none; }
+    #taskTable .num { text-align:right; }
+    /* 弹窗按钮加大触控区域 */
+    #dlModal .btn, #delModal .btn, #rmTaskModal .btn { min-height:40px; }
+    #log { height:190px; }
   }
 </style>
 </head>
@@ -157,7 +216,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.32 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.33 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -611,23 +670,23 @@ function taskListHtml(d, tasks){
     // 列宽有限: 失败/校验中用短文案, 完整原因放 title
     const btxt = t.phase==="failed" ? "✕ 失败" : (t.phase==="verifying" ? "◌ 校验中" : bd.txt);
     return "<tr>"+
-      "<td><span class='badge "+bd.cls+"' title='"+escA(bd.txt)+"'>"+btxt+"</span>"+
+      "<td class='c-state'><span class='badge "+bd.cls+"' title='"+escA(bd.txt)+"'>"+btxt+"</span>"+
         (bad?"<span class='vflag' title='sha256 校验未通过'>⚠</span>":"")+"</td>"+
-      "<td><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
+      "<td class='c-model'><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
         "<div class='rsub'>"+sub+"</div></td>"+
-      "<td><div class='prow'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
+      "<td class='c-prog'><div class='prow'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
         "<span class='pnum'>"+t.pct.toFixed(1)+"%</span></div></td>"+
-      "<td class='num'>"+fmtGB(t.downloaded)+" / "+(t.total?fmtGB(t.total):"?")+"</td>"+
-      "<td class='num'>"+rate+"</td>"+
-      "<td class='num'>"+etaShort(t.eta_sec)+"</td>"+
-      "<td class='num'>"+(manual ? jCell(manual,pool,t) : t.j+" / "+pool)+"</td>"+
+      "<td class='num' data-l='已下载/总量'>"+fmtGB(t.downloaded)+" / "+(t.total?fmtGB(t.total):"?")+"</td>"+
+      "<td class='num' data-l='速度 MB/s'>"+rate+"</td>"+
+      "<td class='num' data-l='剩余'>"+etaShort(t.eta_sec)+"</td>"+
+      "<td class='num' data-l='分片/池'>"+(manual ? jCell(manual,pool,t) : t.j+" / "+pool)+"</td>"+
       "<td class='opscell'>"+opsHtml(t,i,true)+"</td>"+
     "</tr>";
   }).join("");
   // 固定列宽(table-layout:fixed): 状态与操作列不再被长内容挤压, 模型列吃掉剩余宽度
   return "<div class='tblwrap'><table id='taskTable'>"+
-    "<colgroup><col style='width:78px'><col><col style='width:124px'>"+
-    "<col style='width:120px'><col style='width:64px'><col style='width:56px'>"+
+    "<colgroup><col style='width:78px'><col><col style='width:118px'>"+
+    "<col style='width:120px'><col style='width:88px'><col style='width:56px'>"+
     "<col style='width:66px'><col style='width:146px'></colgroup>"+
     "<thead><tr><th>状态</th><th>模型</th><th>进度</th>"+
     "<th class='num'>已下载 / 总量 GB</th><th class='num'>速度 MB/s</th><th class='num'>剩余</th>"+
