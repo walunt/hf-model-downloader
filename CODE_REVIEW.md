@@ -426,3 +426,38 @@ v2.31 上线的列表视图在真实数据下暴露出三处显示问题（用�
 验证（隔离实例，把 `LOCAL_CLIENTS` 置空以模拟远程）：无口令 401；错误口令 401 且耗时 0.356s；正确口令 200；POST 控制接口同样受控；`/`、图标、manifest 均 200；远程调用 `get_access_token` 被拒（"仅本机可查看访问口令"）。
 
 生产已启用口令（8 位），本机免口令，手机首次访问需输入。
+
+## 三十九、v2.39 调整记录（核查「token 是否会泄露到 GitHub」并加固）
+
+用户提问：明文写进模型目录 `aria2c_urls.txt` 的 token，会不会导致 GitHub 上的 token 泄露。
+
+### 结论：未泄露到 GitHub，有实测证据
+
+| 检查面 | 方法 | 结果 |
+|---|---|---|
+| 全部提交历史 | 遍历 `git rev-list --all` 共 17 个提交，逐提交 `git grep` 匹配 `hf_` 后接 25 位以上字母数字 | 0 命中 |
+| git 对象层 | `git cat-file --batch-all-objects` 枚举全部 blob 并逐个扫描 | 0 命中 |
+| stash / 悬空对象 | `git stash list`、`git fsck --lost-found` 取全部 dangling commit 再 grep | 无 stash，20 个悬空 commit 均无 |
+| 远端实际内容 | 直拉 `raw.githubusercontent.com` 的 `hf_download.sh`/`hfd.sh`/`progress_server.py` | 三份均无 |
+| 远端文件树 | `git/trees?recursive=1` 按 `\.hfd\|aria2c\|safetensors\|last_download\|token\|\.log` 过滤 | 无任何敏感文件名 |
+| 目录关系 | `~/mlx-models` 与仓库根均 `pwd -P`，并 `find -type l` 查仓库内软链 | 模型目录在仓库外，无软链指向 |
+| 本地文本 | README / CODE_REVIEW / 进度文档 / 记忆文件 / server.log / download.log | 0 命中 |
+
+历史里 `git log -S"hf_token"` 命中的两个提交（`c228fa3`、`92cb954`）经逐行查看，内容均为**参数名与文档示例**（如 `--hf_token "$TOKEN"` 变量引用），不含真实值。
+
+### 查出的真实隐患（已修）
+
+`.gitignore` 原先**没有**屏蔽 `*.hfd/`。下载器的 `default_root` 允许用户改成任意路径——若指向本仓库，`git add -A` 会把整个模型目录（含 `aria2c_urls.txt`、`last_download_command`）带入版本库。本次补两道防线：
+
+1. **`.gitignore` 兜底**：`*.hfd/`、`.hfd/`、`aria2c_urls.txt`、`last_download_command`、`repo_info`、`status.json`、`verify_result.json`、`repo_metadata.json`、各类模型权重后缀（`*.safetensors`/`*.gguf`/`*.bin`/`*.pt`/`*.ckpt` 等）、`.huggingface/`、`*.pem`、`.env`。
+2. **`.githooks/pre-commit` 主动拦截**：路径规则拒绝模型/凭证类文件入库；内容规则扫描暂存区新增行，命中 HuggingFace token、GitHub PAT（`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`）、`sk-` 形态 key、`AKIA`、`Authorization: Bearer` 长串、私钥块即退出码 1 拒绝提交；并顺带对新增 `.py` 做 `py_compile`、`.sh` 做 `bash -n`。通过 `git config core.hooksPath .githooks` 启用（随仓库版本化，换机后重配一次即可）。
+
+### 验证
+
+- 守卫自测：正常变更静默通过（退出码 0，无多余输出）；伪造 `hf_` 假 token → 拒绝并脱敏回显；伪造 `.hfd/aria2c_urls.txt` → 拒绝；伪造私钥块 → 拒绝（此处修过一个 bug：`-----BEGIN` 开头的正则被 grep 当成命令行选项，已改为 `-e` 传参）；`.pem` 被 `.gitignore` 直接忽略。
+- 全盘复查：`~/Desktop`、`~/Documents`、`~/Downloads`、shell 历史、`~/mlx-models` 全量遍历匹配真实 token 值 → **0 命中**。
+- 顺带确认：4 个 `aria2c_urls.txt` 在 v2.38 修复后重新生成的内容**不含鉴权头**，权限统一 600。
+
+### 附带修正
+
+README 版本号停在 v2.35（前几轮替换目标串不匹配，替换静默失效导致漏更）。已修正为 v2.39 并补「仓库卫生」章节说明两道防线。

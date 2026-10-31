@@ -15,6 +15,38 @@ localhost.crt
 项目开发进度.md
 .workbuddy/
 
+# ---------- 模型本体与 hfd 元数据（可能含下载令牌，绝不入库）----------
+# 说明: default_root 可被用户改成任意路径; 一旦指向本仓库, 这些文件会被 git add -A 带走
+*.hfd/
+.hfd/
+aria2c_urls.txt
+last_download_command
+repo_info
+status.json
+verify_result.json
+repo_metadata.json
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+*.mlx
+*.npz
+*.h5
+*.ckpt
+
+# ---------- HuggingFace 凭证 ----------
+.huggingface/
+token
+hf_token*
+
+# ---------- 其它凭证形态（防御性）----------
+*.pem
+*.p12
+.env
+.env.*
+
 # ---------- macOS ----------
 .DS_Store
 

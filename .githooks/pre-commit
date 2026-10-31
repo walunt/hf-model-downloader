@@ -1,0 +1,62 @@
+#!/bin/bash
+# 预提交守卫: 阻止把下载令牌/模型目录/凭证文件提交进仓库
+# 安装: bash 安装提交守卫.command  (或 git config core.hooksPath .githooks)
+# 绕过: git commit --no-verify  (不建议; 如确属误报请先修规则)
+
+set -u
+fail=0
+
+# ---------- 1) 禁止入库的路径 ----------
+FORBIDDEN_PATHS='(^|/)\.hfd/|(^|/)aria2c_urls\.txt$|(^|/)last_download_command$|(^|/)repo_info$|(^|/)verify_result\.json$|(^|/)repo_metadata\.json$|\.(safetensors|gguf|onnx|ckpt|mlx|pth|pth\.tar)$|(^|/)\.huggingface/|(^|/)\.env(\.|$)'
+
+bad_paths=$(git diff --cached --name-only --diff-filter=ACMR | grep -Ei "$FORBIDDEN_PATHS" || true)
+if [ -n "$bad_paths" ]; then
+  echo "✗ 提交被拒绝：以下文件属于模型/凭证类，不应入库" >&2
+  echo "$bad_paths" | sed 's/^/    /' >&2
+  fail=1
+fi
+
+# ---------- 2) 扫描新增行的密钥形态 ----------
+# 逐条规则: 说明|正则
+RULES=(
+  "HuggingFace token|hf_[A-Za-z0-9]{25,}"
+  "GitHub PAT|gh[pousr]_[A-Za-z0-9]{20,}"
+  "GitHub 细粒度 PAT|github_pat_[A-Za-z0-9_]{20,}"
+  "OpenAI/兼容 key|sk-[A-Za-z0-9]{20,}"
+  "AWS Access Key|AKIA[0-9A-Z]{16}"
+  "Bearer 鉴权头|Authorization:[[:space:]]*Bearer[[:space:]]+[A-Za-z0-9._-]{20,}"
+  "私钥块|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+)
+
+# 只取新增行, 去掉 +++ 头
+added=$(git diff --cached -U0 --diff-filter=ACMR -- . | grep -E '^\+' | grep -v '^+++' || true)
+
+if [ -n "$added" ]; then
+  for rule in "${RULES[@]}"; do
+    name="${rule%%|*}"
+    re="${rule#*|}"
+    hits=$(echo "$added" | grep -Eio -e "$re" | sort -u || true)
+    if [ -n "$hits" ]; then
+      echo "✗ 提交被拒绝：检测到疑似$name" >&2
+      echo "$hits" | sed -E 's/(.{10}).*/\1***（已截断）/' | sed 's/^/    /' >&2
+      fail=1
+    fi
+  done
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "如需放行请先确认不含真实密钥；确认后可 git commit --no-verify。" >&2
+  exit 1
+fi
+
+# ---------- 3) 提醒: 新增 py/sh 至少做一次语法检查 ----------
+for f in $(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(py|sh)$' || true); do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.py) python3 -m py_compile "$f" 2>/dev/null || { echo "✗ $f 语法错误" >&2; exit 1; } ;;
+    *.sh) bash -n "$f" 2>/dev/null || { echo "✗ $f 语法错误" >&2; exit 1; } ;;
+  esac
+done
+
+exit 0
