@@ -86,6 +86,26 @@
   .task { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; background:#141b2b; }
   .task:last-child { margin-bottom:0; }
   .task .ops { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  /* 视图切换 */
+  .viewswitch { margin-left:auto; display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .viewswitch button { background:#10162a; color:var(--dim); border:none; padding:4px 12px; font-size:12px; cursor:pointer; font-family:inherit; }
+  .viewswitch button:hover { color:var(--txt); }
+  .viewswitch button.on { background:#233254; color:var(--txt); }
+  /* 列表视图 */
+  .tblwrap { overflow-x:auto; margin-top:4px; }
+  #taskTable { width:100%; border-collapse:collapse; font-size:12px; }
+  #taskTable th { text-align:left; color:var(--dim); font-weight:400; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  #taskTable td { padding:8px; border-bottom:1px dashed #202a42; vertical-align:middle; }
+  #taskTable tbody tr:last-child td { border-bottom:none; }
+  #taskTable tbody tr:hover { background:#141b2b; }
+  #taskTable .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #taskTable .rname { max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; cursor:pointer; }
+  #taskTable .rsub { font-size:11px; color:var(--dim); max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
+  #taskTable .rsub2 { font-size:11px; color:var(--dim); }
+  #taskTable .pctnum { text-align:right; }
+  #taskTable .opscell .btn { padding:4px 8px; }
+  .pbar { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; overflow:hidden; min-width:90px; }
+  .pbar > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
   #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transition:opacity .25s;pointer-events:none;max-width:80vw;text-align:center;}
   #toast.show{opacity:1;}
   #toast.ok{color:var(--ok);border-color:#1f5c38;}
@@ -133,7 +153,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.30 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.31 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -180,7 +200,9 @@
 
   <!-- 下载任务 -->
   <div class="card" id="tasksCard">
-    <h2>下载任务 <span id="taskCount" class="badge">0 个</span></h2>
+    <h2>下载任务 <span id="taskCount" class="badge">0 个</span>
+      <span class="viewswitch"><button id="btnViewCard">卡片</button><button id="btnViewList">列表</button></span>
+    </h2>
     <div class="ratechart">
       <div class="k"><span>最近 30 分钟总下载速度</span><span id="rateStat">--</span></div>
       <canvas id="rateCanvas"></canvas>
@@ -288,6 +310,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const escA = s => esc(s).replace(/'/g,"&#39;");   // 单引号属性用
 const fmtGB = b => (b/1e9).toFixed(2);
 const fmtAuto = b => b >= 1e9 ? (b/1e9).toFixed(2)+" GB" : b >= 1e6 ? (b/1e6).toFixed(1)+" MB" : (b/1e3).toFixed(0)+" KB";
 const fmtEta = s => { if(!s||s<=0||!isFinite(s)) return "--"; const h=Math.floor(s/3600),m=Math.floor(s%3600/60); return h>0?h+" 小时 "+m+" 分":m+" 分钟"; };
@@ -518,68 +541,107 @@ function taskBadge(t, dlRunning){
   return {txt:"○ 等待中", cls:"stop"};
 }
 
+// ---- 任务列表: 卡片 / 列表 两种视图(共用同一份数据与操作, 选择记忆在 localStorage) ----
+let viewMode = (localStorage.getItem("hfTaskView")==="list") ? "list" : "card";
+let lastStatus = null;
+
+function jCell(manual, pool, t){
+  if(!manual) return "<span style='font-weight:600'>"+t.j+"</span>";
+  let opts="";
+  for(let j=1;j<=pool;j++) opts+="<option value='"+j+"'"+(t.j===j?" selected":"")+">"+j+"</option>";
+  return "<select class='jsel' data-dest=\""+esc(t.dest)+"\" style='padding:2px 4px;font-size:12px'>"+opts+"</select>";
+}
+function opsHtml(t,i){
+  return "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
+         "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+
+         "<button class='btn sm del' onclick='removeTask("+i+")'>删除任务</button>";
+}
+
+function taskCardHtml(d,t,i){
+  const bd=taskBadge(t, d.dl_running);
+  const manual = d.cfg.alloc_mode==="manual", pool = d.cfg.global_j||10;
+  const vbar = t.verify ? (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total
+    ? "<div class='vbar bad'>⚠ 校验：通过 "+t.verify.ok+"/"+t.verify.total+"，损坏 "+(t.verify.bad||0)+"、缺失 "+(t.verify.miss||0)+"</div>"
+    : "<div class='vbar ok'>✔ sha256 校验通过 "+t.verify.ok+"/"+t.verify.total+(t.verify.ts?"（"+esc(t.verify.ts)+"）":"")+"</div>") : "";
+  const vprog = t.phase==="verifying" && t.verify_prog
+    ? "<div class='mini' style='margin-top:8px'><div style='width:"+(t.verify_prog[1]?(t.verify_prog[0]/t.verify_prog[1]*100).toFixed(0):0)+"%'></div></div>" : "";
+  const act = (t.active||[]).map(f=>"<li><div class='frow'><span class='n'>"+esc(f.name)+"</span><span class='s'>"+
+    fmtGB(f.bytes)+" / "+fmtGB(f.size)+" GB · "+f.pct.toFixed(0)+"%</span></div>"+
+    "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
+  return "<div class='task'>"+
+    "<div class='top'><div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
+    "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
+    "<div class='hint' style='cursor:pointer;word-break:break-all' title='点击复制本地路径' onclick='copyPath(\""+i+"\")'>"+esc(t.dest||"")+"</div>"+
+    "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(2)+"<small>%</small></div>"+
+    "<div class='stat' style='font-size:11px'>分片 "+jCell(manual,pool,t)+"<span style='color:var(--dim)'> / 池 "+pool+"</span> · 每片 "+t.x+" 线程</div></div>"+
+    "<div class='bar'><div style='width:"+t.pct+"%'></div></div>"+
+    "<div class='grid'>"+
+      "<div class='cell'><div class='k'>已下载</div><div class='v'>"+fmtGB(t.downloaded)+" <small>GB</small></div></div>"+
+      "<div class='cell'><div class='k'>总量</div><div class='v'>"+(t.total?fmtGB(t.total):"未知")+" <small>GB</small></div></div>"+
+      "<div class='cell'><div class='k'>当前速度</div><div class='v'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <small>MB/s</small></div></div>"+
+      "<div class='cell'><div class='k'>预计剩余</div><div class='v' id='eta"+i+"'>"+fmtEta(t.eta_sec)+"</div></div>"+
+    "</div>"+
+    vbar+vprog+
+    (t.last_msg?"<div class='hint' style='margin-top:6px'>"+esc(t.last_msg)+"</div>":"")+
+    (act?"<ul class='files'>"+act+"</ul>":"")+
+    "<div class='ops' style='margin-top:10px'>"+opsHtml(t,i)+"</div>"+
+  "</div>";
+}
+
+function taskListHtml(d, tasks){
+  const manual = d.cfg.alloc_mode==="manual", pool = d.cfg.global_j||10;
+  const rows = tasks.map((t,i)=>{
+    const bd=taskBadge(t, d.dl_running);
+    const bad = t.verify && (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total);
+    const sub = esc(t.last_msg || (epName(t.endpoint)+" · "+t.files_done+"/"+(t.files_expected||"?")+" 文件"));
+    return "<tr>"+
+      "<td><span class='badge "+bd.cls+"'>"+bd.txt+"</span>"+(bad?"<span class='badge bad' style='margin-left:4px'>校验未过</span>":"")+"</td>"+
+      "<td><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
+        "<div class='rsub'>"+sub+"</div></td>"+
+      "<td class='wpct'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
+        "<div class='rsub pctnum'>"+t.pct.toFixed(1)+"%</div></td>"+
+      "<td class='num'>"+fmtGB(t.downloaded)+" <span class='rsub2'>/ "+(t.total?fmtGB(t.total):"?")+"</span> <span class='rsub2'>GB</span></td>"+
+      "<td class='num'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <span class='rsub2'>MB/s</span></td>"+
+      "<td class='num'>"+fmtEta(t.eta_sec)+"</td>"+
+      "<td class='num'>"+jCell(manual,pool,t)+"<span class='rsub2'> / "+pool+"</span></td>"+
+      "<td class='num opscell'>"+opsHtml(t,i)+"</td>"+
+    "</tr>";
+  }).join("");
+  return "<div class='tblwrap'><table id='taskTable'><thead><tr>"+
+    "<th>状态</th><th>模型</th><th style='min-width:130px'>进度</th>"+
+    "<th class='num'>已下载 / 总量</th><th class='num'>速度</th><th class='num'>剩余</th>"+
+    "<th class='num'>分片</th><th></th></tr></thead><tbody>"+rows+"</tbody></table></div>";
+}
+
 function renderTasks(d){
   const tasks=d.tasks||[];
-  lastTasks=tasks;
+  lastTasks=tasks; lastStatus=d;
   $("taskCount").textContent=tasks.length+" 个";
   $("noTasks").style.display=tasks.length?"none":"";
-  const manual = d.cfg.alloc_mode==="manual";
-  const pool = d.cfg.global_j||10;
+  $("btnViewCard").className = viewMode==="card" ? "on" : "";
+  $("btnViewList").className = viewMode==="list" ? "on" : "";
   const div=$("tasks");
-  div.innerHTML = tasks.map((t,i)=>{
-    const bd=taskBadge(t, d.dl_running);
-    const destTxt=esc(t.dest||"");
-    // 手动方案: 分片选择(change 时提交); 自动方案: 只读显示
-    let jHtml;
-    if(manual){
-      let opts="";
-      for(let j=1;j<=pool;j++) opts+="<option value='"+j+"'"+(t.j===j?" selected":"")+">"+j+" 分片</option>";
-      jHtml="<select class='jsel' data-dest=\""+esc(t.dest)+"\" style='padding:3px 6px;font-size:12px'>"+opts+"</select>";
-    } else {
-      jHtml="<span style='font-weight:600'>"+t.j+"</span>";
-    }
-    const vbar = t.verify ? (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total
-      ? "<div class='vbar bad'>⚠ 校验：通过 "+t.verify.ok+"/"+t.verify.total+"，损坏 "+(t.verify.bad||0)+"、缺失 "+(t.verify.miss||0)+"</div>"
-      : "<div class='vbar ok'>✔ sha256 校验通过 "+t.verify.ok+"/"+t.verify.total+(t.verify.ts?"（"+esc(t.verify.ts)+"）":"")+"</div>") : "";
-    const vprog = t.phase==="verifying" && t.verify_prog
-      ? "<div class='mini' style='margin-top:8px'><div style='width:"+(t.verify_prog[1]?(t.verify_prog[0]/t.verify_prog[1]*100).toFixed(0):0)+"%'></div></div>" : "";
-    const act = (t.active||[]).map(f=>"<li><div class='frow'><span class='n'>"+esc(f.name)+"</span><span class='s'>"+
-      fmtGB(f.bytes)+" / "+fmtGB(f.size)+" GB · "+f.pct.toFixed(0)+"%</span></div>"+
-      "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
-    const ops =
-      "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
-      "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+
-      "<button class='btn sm del' onclick='removeTask("+i+")'>删除任务</button>";
-    return "<div class='task'>"+
-      "<div class='top'><div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
-      "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
-      "<div class='hint' style='cursor:pointer;word-break:break-all' title='点击复制本地路径' onclick='copyPath(\""+i+"\")'>"+destTxt+"</div>"+
-      "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(2)+"<small>%</small></div>"+
-      "<div class='stat' style='font-size:11px'>分片 "+jHtml+"<span style='color:var(--dim)'> / 池 "+pool+"</span> · 每片 "+t.x+" 线程</div></div>"+
-      "<div class='bar'><div style='width:"+t.pct+"%'></div></div>"+
-      "<div class='grid'>"+
-        "<div class='cell'><div class='k'>已下载</div><div class='v'>"+fmtGB(t.downloaded)+" <small>GB</small></div></div>"+
-        "<div class='cell'><div class='k'>总量</div><div class='v'>"+(t.total?fmtGB(t.total):"未知")+" <small>GB</small></div></div>"+
-        "<div class='cell'><div class='k'>当前速度</div><div class='v'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <small>MB/s</small></div></div>"+
-        "<div class='cell'><div class='k'>预计剩余</div><div class='v' id='eta"+i+"'>"+fmtEta(t.eta_sec)+"</div></div>"+
-      "</div>"+
-      vbar+vprog+
-      (t.last_msg?"<div class='hint' style='margin-top:6px'>"+esc(t.last_msg)+"</div>":"")+
-      (act?"<ul class='files'>"+act+"</ul>":"")+
-      "<div class='ops' style='margin-top:10px'>"+ops+"</div>"+
-    "</div>";
-  }).join("");
-  // 手动方案分片选择: 提交后端
+  div.innerHTML = tasks.length ? (viewMode==="list" ? taskListHtml(d,tasks)
+                              : tasks.map((t,i)=>taskCardHtml(d,t,i)).join("")) : "";
+  // 手动方案分片选择: 提交后端(两种视图通用)
   div.querySelectorAll("select.jsel").forEach(sel=>{
     sel.onchange=async()=>{
       const dest=sel.dataset.dest;
-      const d=await post({action:"set_j", dest:dest, j:+sel.value});
-      if(d.ok) toast("✔ 分片数已调整，正在重启该任务生效（断点续传）");
-      else { toast("设置失败："+d.error, false); refresh(); }
+      const res=await post({action:"set_j", dest:dest, j:+sel.value});
+      if(res.ok) toast("✔ 分片数已调整，正在重启该任务生效（断点续传）");
+      else { toast("设置失败："+res.error, false); refresh(); }
     };
   });
   drawRate(d.rate_hist||[], d.rate||0, d.disk_free);
 }
+
+function setTaskView(v){
+  viewMode = v==="list" ? "list" : "card";
+  try{ localStorage.setItem("hfTaskView", viewMode); }catch(e){}
+  if(lastStatus) renderTasks(lastStatus);
+}
+$("btnViewCard").onclick=()=>setTaskView("card");
+$("btnViewList").onclick=()=>setTaskView("list");
 
 function copyPath(i){
   const t=(lastTasks[i]||{}).dest;

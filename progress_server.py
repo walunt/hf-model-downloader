@@ -625,6 +625,7 @@ def handle_control(data):
             if k:
                 _meta_cache.pop(k, None); _scan_cache.pop(k, None)
         _fill_queue()                         # 释放的并发名额让队列补位
+        print("[删除任务] %s | mode=%s | %s" % (dkey, rm_mode, detail), flush=True)
         return {"ok": True, "removed": True, "dest": dkey, "mode": rm_mode, "detail": detail}
     return {"ok": True, "task": task, "dl_running": dl_running()}
 
