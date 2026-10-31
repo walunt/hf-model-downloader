@@ -248,8 +248,18 @@
     </div>
   </div>
 </div>
+<div id="authModal" style="display:none;position:fixed;inset:0;background:rgba(8,12,20,.94);z-index:200;align-items:center;justify-content:center;padding:20px">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;max-width:360px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.6)">
+    <div style="font-size:15px;font-weight:600;margin-bottom:6px">需要访问口令</div>
+    <div class="hint" style="margin-bottom:12px">本服务已开启访问口令保护。口令在 Mac 的「默认设置 → 访问口令」里查看。</div>
+    <input id="authInput" type="text" autocomplete="current-password" placeholder="输入访问口令"
+           style="width:100%;padding:10px;font-size:16px;border-radius:8px;border:1px solid var(--line);background:#0e1421;color:var(--txt)">
+    <div class="hint" id="authMsg" style="color:var(--red);margin-top:6px;min-height:18px"></div>
+    <button class="btn primary" id="authBtn" style="width:100%;margin-top:8px;min-height:42px">进入</button>
+  </div>
+</div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.37 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.38 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -393,6 +403,13 @@
       </select>
     </div>
     <div class="hint" id="lanHint" style="margin-top:4px"></div>
+    <div class="row" style="margin-top:8px">
+      <span class="hint" style="width:84px">访问口令</span>
+      <span class="tag" id="authTag">未启用</span>
+      <button class="btn sm" id="btnGenAuth">生成并启用</button>
+      <button class="btn sm" id="btnClearAuth">清除</button>
+    </div>
+    <div class="hint" id="authHint" style="margin-top:4px"></div>
     <div class="row" style="margin-top:12px">
       <button class="btn primary" id="saveSetBtn">保存设置</button>
       <span class="hint">保存后新下载的模型使用以上设置</span>
@@ -462,8 +479,28 @@ function syncTokenTag(has){
   ["tokenTag","tokenTag2"].forEach(id=>{ const el=$(id); if(el){ el.textContent=txt; el.style.color=has?"var(--ok)":"var(--warn)"; } });
 }
 
+// ---- 访问口令（局域网访问时启用；本机始终免口令）----
+const AUTH = {
+  get(){ try { return localStorage.getItem("hfAuthToken") || ""; } catch(e){ return ""; } },
+  set(v){ try { v ? localStorage.setItem("hfAuthToken", v) : localStorage.removeItem("hfAuthToken"); } catch(e){} },
+  headers(extra){ const h = Object.assign({}, extra||{}); const t=this.get(); if(t) h["X-Auth-Token"]=t; return h; }
+};
+function showAuth(msg){
+  if($("authMsg")) $("authMsg").textContent = msg || "";
+  if($("authModal")) $("authModal").style.display = "flex";
+}
+async function tryAuth(){
+  const v = ($("authInput").value||"").trim();
+  if(!v){ $("authMsg").textContent = "请输入口令"; return; }
+  AUTH.set(v);
+  const r = await fetch("/api/status",{cache:"no-store",headers:AUTH.headers()});
+  if(r.ok){ $("authModal").style.display="none"; $("authInput").value=""; refresh(); loadLib(); }
+  else { AUTH.set(""); $("authMsg").textContent = "口令不正确"; }
+}
+
 async function post(body){
-  const r = await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const r = await fetch("/api/control",{method:"POST",headers:AUTH.headers({"Content-Type":"application/json"}),body:JSON.stringify(body)});
+  if(r.status === 401){ showAuth("需要访问口令"); return {ok:false, error:"需要访问口令"}; }
   return await r.json();
 }
 
@@ -569,7 +606,9 @@ $("speedQuick").onchange=()=>{ if($("speedQuick").value!==""){ $("setSpeed").val
 // ---- 本地模型库 ----
 let libModels=[];
 async function loadLib(){
-  try{ const r=await fetch("/api/models"); const d=await r.json();
+  try{ const r=await fetch("/api/models",{headers:AUTH.headers()});
+    if(r.status===401){ showAuth("需要访问口令"); return; }
+    const d=await r.json();
     const models=d.models||[];
     const del=d.deleting||{}, derr=d.delete_errors||{};
     libDeleting=del;
@@ -752,7 +791,9 @@ $("refreshLib").onclick=loadLib;
 let lastTasks=[];
 async function refresh(){
   try{
-    const r=await fetch("/api/status",{cache:"no-store"}); const d=await r.json();
+    const r=await fetch("/api/status",{cache:"no-store",headers:AUTH.headers()});
+    if(r.status===401){ showAuth("需要访问口令"); return; }
+    const d=await r.json();
     if(d.cfg){
       if(!$("setRoot").value) $("setRoot").value=d.cfg.default_root;
       if(!$("setUser").value) $("setUser").value=d.cfg.username||"";
@@ -1105,7 +1146,44 @@ $("logErrOnly").onchange=renderLog;
 $("logSrc").onchange=()=>{ clearSig=null; renderLog(); };
 $("logClear").onclick=()=>{ clearSig=currentLogs().join("\n"); renderLog(); };
 
-refresh(); loadLib();
+// ---- 访问口令设置（仅本机可改）----
+async function loadAuthState(){
+  const d = await post({action:"get_access_token"});
+  if(!d.ok){                       // 非本机: 不显示口令, 也不允许改
+    $("authTag").textContent = "受保护";
+    $("authTag").style.color = "var(--warn)";
+    $("btnGenAuth").disabled = true; $("btnClearAuth").disabled = true;
+    $("authHint").textContent = "口令只能在本机（Mac）上修改。";
+    return;
+  }
+  const on = !!d.token;
+  $("authTag").textContent = on ? "已启用" : "未启用";
+  $("authTag").style.color = on ? "var(--ok)" : "";
+  $("btnGenAuth").textContent = on ? "重新生成" : "生成并启用";
+  $("btnGenAuth").disabled = false; $("btnClearAuth").disabled = !on;
+  $("authHint").textContent = on
+    ? "手机首次打开时输入此口令：" + d.token + "（本机访问无需口令）"
+    : "未设置口令：同一 Wi-Fi 下任何设备都能直接打开本页并操作。建议开启，尤其是带出门时。";
+}
+$("btnGenAuth").onclick = async () => {
+  if(!confirm("生成新的访问口令并启用？\n\n手机/平板首次访问需输入该口令；本机（这台 Mac）不需要。")) return;
+  const d = await post({action:"set_access_token", token:"auto"});
+  if(!d.ok){ toast("设置失败：" + d.error, false); return; }
+  AUTH.set("");                       // 本机免口令, 清掉本地缓存
+  toast("✔ 已启用访问口令");
+  loadAuthState();
+};
+$("btnClearAuth").onclick = async () => {
+  if(!confirm("清除访问口令？\n\n清除后，同一局域网内任何设备都能直接打开本页并操作下载。")) return;
+  const d = await post({action:"set_access_token", token:""});
+  if(!d.ok){ toast("取消失败：" + d.error, false); return; }
+  toast("✔ 已清除访问口令");
+  loadAuthState();
+};
+$("authBtn").onclick = tryAuth;
+$("authInput").addEventListener("keydown", e => { if(e.key === "Enter") tryAuth(); });
+
+refresh(); loadLib(); loadAuthState();
 let statTO;
 function statLoop(){ refresh(); statTO=setTimeout(statLoop, document.hidden?10000:2000); }
 statLoop();

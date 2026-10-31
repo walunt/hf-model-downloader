@@ -2,7 +2,7 @@
 """通用 HuggingFace 模型下载器 v2.0: 本地看板 + 控制台 (http://localhost:8765, http/https 双协议)
 v2.0: 多任务并发下载 — tasks 列表(最多 max_models 个同时下载) + 全局分片池(global_j)自动/手动分配
 """
-import json, os, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes
+import json, os, time, threading, socket, ssl, subprocess, re, signal, shutil, urllib.request, urllib.error, mimetypes, hmac, secrets
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -64,6 +64,7 @@ _cfg.setdefault("global_j", 10)
 _cfg.setdefault("alloc_mode", "size")
 _cfg.setdefault("x", 8)  # 每分片线程数(全局, 控制台统一设置, 应用到所有任务)
 _cfg.setdefault("lan", False)  # 是否允许局域网设备访问(手机/平板); 默认仅本机
+_cfg.setdefault("access_token", "")  # 局域网访问口令(空=不校验); 本机始终免口令
 # 兼容 v2.0 旧值 "auto"(按剩余大小比例) → 新枚举名 "size"
 if _cfg.get("alloc_mode") == "auto": _cfg["alloc_mode"] = "size"
 # 队列任务补默认字段(旧任务可能缺)
@@ -339,8 +340,23 @@ def _fill_queue():
     for t in launch_list:
         launch(t)
 
-def handle_control(data):
+def handle_control(data, local=False):
     action = str(data.get("action", ""))
+
+    # ---- 访问口令: 只允许本机查看/设置, 手机端拿不到口令本身 ----
+    if action == "get_access_token":
+        if not local: return {"ok": False, "error": "仅本机可查看访问口令"}
+        return {"ok": True, "token": _cfg.get("access_token", "")}
+    if action == "set_access_token":
+        if not local: return {"ok": False, "error": "仅本机可设置访问口令"}
+        v = str(data.get("token", "")).strip()
+        if v == "auto": v = secrets.token_hex(4)          # 8 位十六进制
+        if v and len(v) < 4: return {"ok": False, "error": "口令至少 4 位"}
+        with _cfg_lock:
+            _cfg["access_token"] = v
+            save_cfg()
+        print("[安全] 访问口令已%s" % ("清除" if not v else "设置"), flush=True)
+        return {"ok": True, "token": v}
 
     # analyze 含网络请求, 放在锁外执行, 避免阻塞其他请求
     if action == "analyze":
@@ -659,6 +675,7 @@ def public_cfg():
             "x": max(1, int(_cfg.get("x") or 8)),
             "max_models_limit": MAX_MODELS_LIMIT, "max_conn": MAX_CONN,
             "lan": bool(_cfg.get("lan")),
+            "auth_required": bool(_cfg.get("access_token")),
             "lan_urls": ["http://%s:%d" % (ip, PORT) for ip in OWN_IPS]}
 
 # ---------------- 磁盘扫描 ----------------
@@ -1203,6 +1220,15 @@ class Handler(BaseHTTPRequestHandler):
     def _lan_ok(self):
         """未开启局域网访问时, 只接受本机(127.0.0.1/::1)请求, 其余一律 403"""
         return bool(_cfg.get("lan")) or self.client_address[0] in LOCAL_CLIENTS
+    def _need_auth(self):
+        """是否需要口令: 未设口令 -> 否; 本机 -> 否; 其余必须带正确的 X-Auth-Token"""
+        tok = _cfg.get("access_token") or ""
+        if not tok: return False
+        if self.client_address[0] in LOCAL_CLIENTS: return False
+        given = (self.headers.get("X-Auth-Token") or "").strip()
+        if given and hmac.compare_digest(given, tok): return False
+        if given: time.sleep(0.35)   # 错误口令延时, 拖慢暴力尝试
+        return True
     def _serve_static(self, p):
         """仅暴露 PWA 的 manifest 与 assets/ 目录下的图标; 路径必须落在 PROJ/assets 内"""
         if p == "/manifest.webmanifest":
@@ -1233,6 +1259,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"ok": False, "error": "服务目前仅允许本机访问；如需手机访问，请在「默认设置」开启「允许局域网访问」"}, code=403)
             return
         p = self.path.split("?")[0]
+        if p.startswith("/api/") and self._need_auth():
+            self._send({"ok": False, "need_auth": True, "error": "需要访问口令"}, code=401)
+            return
         if p == "/api/status": self._send(status_json())
         elif p == "/api/models": self._send(list_models())
         elif p == "/" or p.startswith("/index"):
@@ -1246,10 +1275,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/api/control": self._send({"ok": False, "error": "not found"}, code=404); return
         if not self._same_origin():
             self._send({"ok": False, "error": "forbidden: 仅允许本机页面调用"}, code=403); return
+        if self._need_auth():
+            self._send({"ok": False, "need_auth": True, "error": "需要访问口令"}, code=401); return
         try:
             n = int(self.headers.get("Content-Length", 0)); data = json.loads(self.rfile.read(n) or b"{}")
         except Exception: data = {}
-        try: self._send(handle_control(data))
+        try: self._send(handle_control(data, self.client_address[0] in LOCAL_CLIENTS))
         except Exception as e: self._send({"ok": False, "error": str(e)})
     def _same_origin(self):
         """只接受来自本机页面的控制请求, 降低其他网页 CSRF 触发下载的可能"""

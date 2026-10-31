@@ -83,11 +83,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# 支持从 600 权限文件读取 token: 避免 token 出现在 ps 命令行或环境变量里
+if [[ -z "${HF_TOKEN:-}" && -n "${HF_TOKEN_FILE:-}" && -f "${HF_TOKEN_FILE:-}" ]]; then
+    HF_TOKEN="$(cat "$HF_TOKEN_FILE")"
+fi
+
 # A fingerprint of the options that affect the file list; a change forces regeneration.
 generate_command_string() {
     printf 'REPO_ID=%s TOOL=%s INCLUDE=%s EXCLUDE=%s DATASET=%s HF_USERNAME=%s HF_TOKEN=%s HF_ENDPOINT=%s REVISION=%s' \
         "$REPO_ID" "$TOOL" "${INCLUDE_PATTERNS[*]}" "${EXCLUDE_PATTERNS[*]}" "${DATASET:-0}" \
-        "${HF_USERNAME:-}" "${HF_TOKEN:-}" "${HF_ENDPOINT:-}" "$REVISION"
+        "${HF_USERNAME:-}" "${HF_TOKEN:+set}" "${HF_ENDPOINT:-}" "$REVISION"
 }
 
 check_command() {
@@ -303,6 +308,7 @@ build_download_list() {
             printf '%s/%s/resolve/%s/%s\n' "$HF_ENDPOINT" "$DOWNLOAD_API_PATH" "$REVISION" "$path"
         fi
     done < "$needed" > "$fileslist_file"
+    chmod 600 "$fileslist_file" 2>/dev/null || true   # 内含 Authorization 头, 仅本人可读
     rm -f "$needed"
 }
 

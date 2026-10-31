@@ -395,3 +395,34 @@ v2.31 上线的列表视图在真实数据下暴露出三处显示问题（用�
 「◌ 校验中」原本与「■ 已暂停」同为琥珀色系（仅实底/描边之分），仍需靠文字分辨。改为青色 `#2fd3e0`（描边 `#17545e`、底 `#06222a`）。
 
 五种状态至此全部异色：已完成=绿 `#38c172`、下载中=蓝 `#5aa8ff`、已暂停=琥珀 `#e0a030`、校验中=青 `#2fd3e0`、失败=红 `#e0556b`。验证方式同上一版：五种状态渲染到同一屏截图，确认青色与绿色、蓝色均可区分。
+
+## 三十八、v2.38 调整记录（修复两处 P0 安全项）
+
+代码审查发现两个真实安全问题，本轮集中修复。
+
+### P0-1 HF Token 暴露（两条泄露路径）
+
+**路径一：命令行**。`hf_download.sh` 原先把 token 作为 `--hf_token` 参数传给 `hfd.sh`，`ps aux` 与「活动监视器」都能直接读到（实测 `ps -o command=` 可见完整 token）。
+**路径二：落盘**。`hfd.sh` 把 `header=Authorization: Bearer <token>` 写进 `<模型目录>/.hfd/aria2c_urls.txt`，文件权限 644 且**长期保留**——比命令行更严重，实测 4 个模型目录共残留 84 行。
+
+修复：
+1. `hf_download.sh` 把 token 写入 `mktemp` 的 600 临时文件，`export HF_TOKEN_FILE`，命令行只传非敏感的 `--hf_username`；
+2. `hfd.sh` 参数解析后新增：`HF_TOKEN` 为空且 `HF_TOKEN_FILE` 存在时从中读取——token 既不在 argv，也不在环境变量；
+3. `hfd.sh` 的缓存指纹把 `HF_TOKEN=<值>` 改为 `HF_TOKEN=set`，不再把明文写进 `repo_info`；
+4. `aria2c_urls.txt` 生成后立即 `chmod 600`；
+5. `hf_download.sh` 注册 `trap scrub_secrets EXIT`：退出/失败时删临时文件，并用 `grep -v` 抹掉 urls 文件里的 Authorization 行（开头也先清一次历史残留）；
+6. 已对现存 4 个模型目录执行清理（移除 84 行鉴权头并收紧为 600）。
+
+验证：用桩版 `hfd.sh` 拦截调用，确认实际 argv 为 `o/t --local-dir ... --tool aria2c -x 4 -j 2 --hf_username u`（**不含 token**），而 `hfd.sh` 通过 `HF_TOKEN_FILE` 正确读到 token；运行结束后 urls 文件鉴权头已清除、临时文件无残留。
+
+### P0-2 局域网无身份校验
+
+`lan` 开启后同 Wi-Fi 任何设备都能操作下载、**彻底删除模型目录**。新增访问口令：
+- 配置项 `access_token`（空=不校验）；`set_access_token` / `get_access_token` 两个动作**仅本机可调用**（`handle_control` 新增 `local` 参数），手机端看不到也改不了口令；
+- 请求层 `_need_auth()`：本机回环直接放行；其余必须带 `X-Auth-Token` 且 `hmac.compare_digest` 匹配，错误口令 `sleep(0.35)` 拖慢暴力尝试；
+- 只拦 `/api/*`：页面、`manifest`、图标放行，否则登录页本身都加载不出来（手机首屏体验）。
+- 前端：所有 fetch 带 `X-Auth-Token`（取自 localStorage）；收到 401 弹出全屏口令输入框；「默认设置」新增「访问口令」行（状态/重新生成/清除），口令明文只在本机展示。
+
+验证（隔离实例，把 `LOCAL_CLIENTS` 置空以模拟远程）：无口令 401；错误口令 401 且耗时 0.356s；正确口令 200；POST 控制接口同样受控；`/`、图标、manifest 均 200；远程调用 `get_access_token` 被拒（"仅本机可查看访问口令"）。
+
+生产已启用口令（8 位），本机免口令，手机首次访问需输入。

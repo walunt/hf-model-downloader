@@ -65,8 +65,26 @@ if [ "${HFD_VERIFY_ONLY:-0}" = "1" ]; then
 else
   MAX_ATTEMPTS=4
   RETRY_WAIT="${RETRY_WAIT:-30}"
-  AUTH=()
-  if [ -n "$TOKEN" ]; then AUTH=(--hf_username "$USERNAME" --hf_token "$TOKEN"); fi
+  AUTH=(); TOKF=""
+  # 安全: token 不走命令行(ps 可见), 改为写入 600 临时文件, 由 hfd.sh 读取
+  if [ -n "$TOKEN" ]; then
+    TOKF="$(mktemp "${TMPDIR:-/tmp}/hftok.XXXXXX")"
+    chmod 600 "$TOKF"
+    printf '%s' "$TOKEN" > "$TOKF"
+    export HF_TOKEN_FILE="$TOKF"
+    AUTH=(--hf_username "$USERNAME")   # 用户名非敏感, hfd.sh 的 gated 校验要求非空
+  fi
+  # 退出/中断时清掉临时 token 文件, 并抹掉 aria2c_urls.txt 里的 Authorization 头
+  scrub_secrets() {
+    [ -n "${TOKF:-}" ] && rm -f "$TOKF"
+    local f="$DEST/.hfd/aria2c_urls.txt"
+    if [ -f "$f" ] && grep -q 'Authorization: Bearer' "$f" 2>/dev/null; then
+      grep -v 'Authorization: Bearer' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f" || rm -f "$f.tmp"
+      echo "[安全] 已清除 aria2c_urls.txt 中的鉴权头"
+    fi
+  }
+  trap scrub_secrets EXIT
+  scrub_secrets   # 先清一次上一次运行可能留下的残留
   export HFD_SPEED_LIMIT="${HFD_SPEED_LIMIT:-0}"
   attempt=1
   while :; do
