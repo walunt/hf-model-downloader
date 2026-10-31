@@ -121,7 +121,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.28 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.29 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -536,7 +536,8 @@ function renderTasks(d){
       "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
     const ops =
       "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
-      "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>";
+      "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+
+      "<button class='btn sm del' onclick='removeTask("+i+")'>删除任务</button>";
     return "<div class='task'>"+
       "<div class='top'><div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
       "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
@@ -578,6 +579,21 @@ async function taskOp(action, i){
   const d=await post({action, dest:t.dest});
   if(!d.ok) toast("操作失败："+d.error, false);
   else toast(action==="stop"?"✔ 已暂停 "+t.repo:"✔ 已继续 "+t.repo);
+  refresh();
+}
+// 删除任务: 只移除任务卡片, 不删任何本地文件(删文件用模型库的删除)
+async function removeTask(i){
+  const t=lastTasks[i]; if(!t) return;
+  const running = t.want_run && t.alive;
+  const pct = t.pct.toFixed(1);
+  let msg = "从下载任务列表移除："+t.repo+"\n保存目录："+t.dest+"\n当前进度："+pct+"%\n\n";
+  msg += running ? "该任务正在下载，将先停止下载（已下载的文件保留，之后可从「最近任务」续传）。\n\n"
+                 : "已下载的文件会保留，之后可从「最近任务」重新续传。\n\n";
+  msg += "只移除任务卡片，不删除任何本地文件。\n要删除已下载的模型文件，请用「本地模型库」的「删除」。\n\n确认移除？";
+  if(!confirm(msg)) return;
+  const d=await post({action:"remove_task", dest:t.dest});
+  if(!d.ok) toast("移除失败："+d.error, false);
+  else toast("✔ 已移除任务："+t.repo);
   refresh();
 }
 

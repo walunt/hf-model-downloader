@@ -548,7 +548,7 @@ def handle_control(data):
             # 任务操作: 按 dest 定位
             dest = expand((data.get("dest") or "").strip())
             task = tasks.get(dest)
-            if action in ("stop", "start", "set_j") and not task:
+            if action in ("stop", "start", "set_j", "remove_task") and not task:
                 return {"ok": False, "error": "任务不存在"}
             if action == "stop":
                 task["want_run"] = False
@@ -577,6 +577,11 @@ def handle_control(data):
                 task["j"] = nj
                 task["last_msg"] = time.strftime("%T") + " 分片调整为 %d" % nj
                 save_cfg(); act = "set_j"
+            elif action == "remove_task":
+                # 只移除任务条目, 不动磁盘文件(删除文件请用模型库的「删除」)
+                task["want_run"] = False
+                tasks.pop(dest, None)
+                save_cfg(); act = "remove"
             else:
                 return {"ok": False, "error": "unknown action"}
     # ---- 进程操作放锁外 ----
@@ -590,6 +595,14 @@ def handle_control(data):
         launch(task)
     elif act == "set_j":
         _restart_tasks([task])
+    elif act == "remove":
+        dkey = task.get("dest", "")
+        stop_task(task)                       # 在下载则先精确停掉进程组, 避免留下孤儿进程
+        _task_state.pop(dkey, None)           # 清自动重启节流状态
+        with _slock:
+            _task_sample.pop(dkey, None); _task_rates.pop(dkey, None)
+        _fill_queue()                         # 释放的并发名额让队列补位
+        return {"ok": True, "removed": True, "dest": dkey}
     return {"ok": True, "task": task, "dl_running": dl_running()}
 
 def public_cfg():
