@@ -128,6 +128,35 @@
   #taskTable .pnum { width:42px; flex-shrink:0; text-align:right; font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
   #taskTable .opscell { white-space:nowrap; text-align:right; padding-right:2px; }
   #taskTable .opscell .btn { padding:4px 7px; font-size:11px; margin-left:4px; }
+  /* 进度条按状态分色: 已完成绿 / 下载中蓝(默认) / 已暂停灰 / 校验中青 / 失败红 */
+  .bar.bar-done > div, .pbar.bar-done > div { background:linear-gradient(90deg,#1f7a45,#38c172); }
+  .bar.bar-idle > div, .pbar.bar-idle > div { background:linear-gradient(90deg,#333d52,#4d576e); }
+  .bar.bar-verify > div, .pbar.bar-verify > div { background:linear-gradient(90deg,#17545e,#2fd3e0); }
+  .bar.bar-bad > div, .pbar.bar-bad > div { background:linear-gradient(90deg,#7a2233,#e0556b); }
+
+  /* 已完成任务折叠成紧凑一行(点「展开」看完整信息) */
+  .task.compact { padding:10px 12px; margin-bottom:8px; }
+  .task.compact .cline { display:flex; align-items:center; gap:8px; }
+  .task.compact .cname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                         font-size:13px; font-weight:500; cursor:pointer; }
+  .task.compact .cpct { font-size:12px; color:var(--ok); font-variant-numeric:tabular-nums; flex-shrink:0; }
+  .task.compact .bar { height:6px; margin:7px 0 5px; }
+  .task.compact .cmeta { font-size:11px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  /* 单行统计(替代原四宫格, 高度约 1/4) */
+  .srow { display:flex; flex-wrap:wrap; gap:2px 14px; align-items:baseline; margin-top:8px; font-size:12px; }
+  .srow .si { display:inline-flex; align-items:baseline; gap:4px; }
+  .srow .si i { color:var(--dim); font-style:normal; font-size:11px; }
+  .srow .si b { font-weight:600; font-variant-numeric:tabular-nums; }
+  .srow .si u { text-decoration:none; color:var(--dim); font-size:11px; }
+  .expandbtn { background:none; border:none; color:var(--dim); font-size:11px; cursor:pointer; padding:3px 6px; border-radius:5px; }
+  .expandbtn:hover { color:var(--txt); background:#1b2338; }
+
+  /* 失效历史(目录已被删除) */
+  .hist-row.dead { opacity:.6; }
+  .hist-row.dead .hr b { text-decoration:line-through; }
+  .dead-tag { color:var(--red); border:1px solid #5c2230; border-radius:4px; font-size:10px; padding:1px 5px; margin-left:6px; }
+
   .pbar { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; overflow:hidden; }
   .pbar > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
   #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transition:opacity .25s;pointer-events:none;max-width:80vw;text-align:center;}
@@ -259,7 +288,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.39 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.40 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -376,7 +405,8 @@
 
   <!-- 最近任务 -->
   <div class="card" id="histCard" style="display:none">
-    <h2>最近任务</h2>
+    <h2>最近任务 <span id="histDeadTag" class="badge" style="display:none;color:var(--red);border-color:#5c2230"></span>
+      <button class="btn sm" id="btnCleanHist" style="margin-left:auto;display:none">清理失效记录</button></h2>
     <div id="hist"></div>
   </div>
 
@@ -420,6 +450,7 @@
   <!-- 本地模型库 -->
   <div class="card">
     <h2>本地模型库 <span class="badge" id="libCount">--</span>
+      <button class="btn sm" id="btnBackfill" style="display:none">补全元数据</button>
       <button class="btn sm" id="btnBatchLib">批量</button>
       <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
     <div class="batchbar" id="libBatchBar">
@@ -633,7 +664,8 @@ async function loadLib(){
       const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
       const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
       return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
-        fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%":"")+(m.date?" · "+esc(m.date):"")+vd+
+        fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%"
+                          :(m.local_only?" · 本地目录（上游无此仓库）":""))+(m.date?" · "+esc(m.date):"")+vd+
         "</span><span class='lib-btn'>"+
         "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
         "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
@@ -645,6 +677,25 @@ async function loadLib(){
       cb.onchange=()=>{ cb.checked ? selLib.add(cb.dataset.repo) : selLib.delete(cb.dataset.repo); updateBatchBars(); };
     });
     updateBatchBars();
+    // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
+    const bf = d.backfill || {};
+    const unk = models.filter(m=>!m.total && !m.local_only).length;   // 本地自建目录查不到上游, 不算"待补全"
+    const bb = $("btnBackfill");
+    if(bb){
+      if(bf.running > 0){
+        bb.style.display = ""; bb.disabled = true; bb.textContent = "补全中… " + bf.running;
+        clearTimeout(window.__bfTimer);
+        window.__bfTimer = setTimeout(loadLib, 1500);
+      } else {
+        bb.disabled = false;
+        bb.style.display = unk ? "" : "none";
+        bb.textContent = "补全元数据 (" + unk + ")";
+        if(bf.total && bf.errors && Object.keys(bf.errors).length){
+          bb.title = "上次补全有 " + Object.keys(bf.errors).length + " 个失败：" +
+                     Object.entries(bf.errors).map(([r,m])=>r+"："+m).join("；");
+        } else bb.title = "为缺少 repo_metadata.json 的模型补拉总量信息（不下载文件）";
+      }
+    }
   }catch(e){ $("lib").textContent="读取失败: "+e.message; }
 }
 // ---- 批量操作：下载任务 ----
@@ -754,6 +805,23 @@ $("btnLibAll").onclick = () => {
   if(on) all.forEach(m=>selLib.add(m.repo));
   loadLib();
 };
+$("btnBackfill").onclick = async () => {
+  if(!confirm("为缺少元数据的模型补拉总量信息？\n\n仅请求一次仓库文件列表（不下载任何文件）。补全后「总量未知」会变成真实大小，分片池分配也更准确。")) return;
+  const d = await post({action:"backfill_metadata"});
+  if(!d.ok){ toast("补全失败：" + d.error, false); return; }
+  if(!d.queued){ toast("没有需要补全的模型"); return; }
+  toast("✔ 已开始补全 " + d.queued + " 个模型（跳过 " + d.skipped + " 个）");
+  setTimeout(loadLib, 1200);
+};
+$("btnCleanHist").onclick = async () => {
+  const dead = (histList||[]).filter(h=>h.exists===false).length;
+  if(!dead) return;
+  if(!confirm("清理 " + dead + " 条失效记录？\n\n这些任务的本地目录已被删除，记录已无用处；此操作只删记录，不动任何文件。")) return;
+  const d = await post({action:"clear_history", dead_only:true});
+  if(!d.ok){ toast("清理失败：" + d.error, false); return; }
+  toast("✔ 已清理 " + d.removed + " 条失效记录");
+  refresh();
+};
 $("btnLibTrash").onclick = () => batchDelModels("trash");
 $("btnLibPurge").onclick = () => batchDelModels("purge");
 
@@ -820,6 +888,7 @@ async function refresh(){
 function taskBadge(t, dlRunning){
   // 状态优先级: 失败 > 校验中 > 运行中 > 已完成 > 已暂停 > 等待
   if(t.phase==="failed") return {txt:"✕ "+(t.phase_msg||"失败"), cls:"bad"};
+  if(t.exists === false) return {txt:"✕ 目录不存在", cls:"bad"};   // 本地目录已被删除, 记录残留
   if(t.want_run && t.alive){
     if(t.phase==="verifying") return {txt:"◌ 校验中"+(t.verify_prog?(" "+t.verify_prog[0]+"/"+t.verify_prog[1]):""), cls:"verify"};
     return {txt:"● 下载中", cls:"live"};
@@ -864,9 +933,10 @@ function jCell(manual, pool, t){
 function opsHtml(t,i,short){
   const delTxt = short ? "删除" : "删除任务";   // 列表视图列宽有限, 用短文案
   const delTitle = short ? " title='删除任务（可选是否连本地文件一起删）'" : "";
+  const del = "<button class='btn sm del'"+delTitle+" onclick='removeTask("+i+")'>"+delTxt+"</button>";
+  if(isTaskDone(t) || t.exists === false) return del;   // 已完成/目录不存在: 暂停继续无意义, 只留删除
   return "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
-         "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+
-         "<button class='btn sm del'"+delTitle+" onclick='removeTask("+i+")'>"+delTxt+"</button>";
+         "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>"+del;
 }
 
 function etaShort(s){
@@ -876,9 +946,59 @@ function etaShort(s){
   return Math.max(1,m)+"m";
 }
 
+// 状态 → 进度条配色类(卡片与列表共用, 避免两处判断分叉)
+function barCls(t){
+  const cls = taskBadge(t, true).cls;
+  if(cls === "run")    return " bar-done";     // 已完成: 绿
+  if(cls === "live")   return "";              // 下载中: 默认蓝
+  if(cls === "verify") return " bar-verify";   // 校验中: 青
+  if(cls === "bad")    return " bar-bad";      // 失败: 红
+  return " bar-idle";                          // 已暂停/等待: 灰
+}
+function isTaskDone(t){ return taskBadge(t, true).cls === "run"; }
+
+// 已完成任务默认折叠; 展开状态记在 localStorage
+let expandSet = new Set();
+try { expandSet = new Set(JSON.parse(localStorage.getItem("hfTaskExpand") || "[]")); } catch(e){ expandSet = new Set(); }
+function toggleTaskExpand(i){
+  const t = (lastTasks||[])[i]; if(!t) return;
+  expandSet.has(t.dest) ? expandSet.delete(t.dest) : expandSet.add(t.dest);
+  try { localStorage.setItem("hfTaskExpand", JSON.stringify([...expandSet])); } catch(e){}
+  if(lastStatus) renderTasks(lastStatus);
+}
+
+// "02:41:33 已完成" → "完成于 02:41:33"; 已完成的徽标已写"已完成", 不再重复一遍
+function doneStamp(msg){
+  const m = String(msg||"").match(/^(\d{1,2}:\d{2}:\d{2})\s*(.*)$/);
+  if(!m) return "";
+  return /已完成|^完成$/.test(m[2]) ? "完成于 " + m[1] : (m[2] ? m[2] + " " + m[1] : "");
+}
+
 function taskCardHtml(d,t,i){
   const bd=taskBadge(t, d.dl_running);
+  const done = bd.cls === "run";
+  const bc = barCls(t);
   const manual = d.cfg.alloc_mode==="manual", pool = d.cfg.global_j||10;
+  const tchk = batchTask ? "<span class='chkwrap'><input type='checkbox' class='tchk' data-dest=\""+escA(t.dest)+"\" "+(selTasks.has(t.dest)?"checked":"")+"></span>" : "";
+  const delBtn = "<button class='btn sm del' onclick='removeTask("+i+")'>删除任务</button>";
+
+  // 已完成且未展开: 压成三行紧凑卡片(标题 / 细进度条 / 汇总), 一屏能看十个以上
+  if(done && !expandSet.has(t.dest)){
+    const vinfo = t.verify ? " · 校验 "+t.verify.ok+"/"+t.verify.total : "";
+    const size = t.total ? fmtGB(t.downloaded)+" / "+fmtGB(t.total)+" GB" : "已下载 "+fmtGB(t.downloaded)+" GB";
+    const when = doneStamp(t.last_msg);
+    return "<div class='task compact'>"+
+      "<div class='cline'>"+tchk+
+        "<span class='badge "+bd.cls+"'>"+bd.txt+"</span>"+
+        "<span class='cname' title='"+escA(t.repo)+"　（点击复制本地路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</span>"+
+        "<span class='cpct'>"+t.pct.toFixed(0)+"%</span>"+
+        "<button class='expandbtn' onclick='toggleTaskExpand("+i+")'>展开</button>"+delBtn+
+      "</div>"+
+      "<div class='bar"+bc+"'><div style='width:"+t.pct+"%'></div></div>"+
+      "<div class='cmeta'>"+size+vinfo+(when?" · "+esc(when):"")+"</div>"+
+    "</div>";
+  }
+
   const vbar = t.verify ? (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total
     ? "<div class='vbar bad'>⚠ 校验：通过 "+t.verify.ok+"/"+t.verify.total+"，损坏 "+(t.verify.bad||0)+"、缺失 "+(t.verify.miss||0)+"</div>"
     : "<div class='vbar ok'>✔ sha256 校验通过 "+t.verify.ok+"/"+t.verify.total+(t.verify.ts?"（"+esc(t.verify.ts)+"）":"")+"</div>") : "";
@@ -887,24 +1007,30 @@ function taskCardHtml(d,t,i){
   const act = (t.active||[]).map(f=>"<li><div class='frow'><span class='n'>"+esc(f.name)+"</span><span class='s'>"+
     fmtGB(f.bytes)+" / "+fmtGB(f.size)+" GB · "+f.pct.toFixed(0)+"%</span></div>"+
     "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
-  const tchk = batchTask ? "<span class='chkwrap'><input type='checkbox' class='tchk' data-dest=\""+escA(t.dest)+"\" "+(selTasks.has(t.dest)?"checked":"")+"></span>" : "";
+  const msg = done ? doneStamp(t.last_msg) : (t.last_msg||"");
+  const foldBtn = done ? "<button class='expandbtn' onclick='toggleTaskExpand("+i+")'>收起</button>" : "";
+  const gone = t.exists === false;   // 本地目录已删除: 不再显示 0.00/未知 这类无意义数据
+
   return "<div class='task'>"+
     "<div class='top'>"+tchk+"<div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
     "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
     "<div class='hint' style='cursor:pointer;word-break:break-all' title='点击复制本地路径' onclick='copyPath(\""+i+"\")'>"+esc(t.dest||"")+"</div>"+
-    "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(2)+"<small>%</small></div>"+
-    "<div class='stat' style='font-size:11px'>分片 "+jCell(manual,pool,t)+"<span style='color:var(--dim)'> / 池 "+pool+"</span> · 每片 "+t.x+" 线程</div></div>"+
-    "<div class='bar'><div style='width:"+t.pct+"%'></div></div>"+
-    "<div class='grid'>"+
-      "<div class='cell'><div class='k'>已下载</div><div class='v'>"+fmtGB(t.downloaded)+" <small>GB</small></div></div>"+
-      "<div class='cell'><div class='k'>总量</div><div class='v'>"+(t.total?fmtGB(t.total):"未知")+" <small>GB</small></div></div>"+
-      "<div class='cell'><div class='k'>当前速度</div><div class='v'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <small>MB/s</small></div></div>"+
-      "<div class='cell'><div class='k'>预计剩余</div><div class='v' id='eta"+i+"'>"+fmtEta(t.eta_sec)+"</div></div>"+
-    "</div>"+
+    (gone ? "" :
+      "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(1)+"<small>%</small></div>"+
+      "<div class='stat' style='font-size:11px'>分片 "+jCell(manual,pool,t)+"<span style='color:var(--dim)'> / 池 "+pool+"</span></div></div>"+
+      "<div class='bar"+bc+"'><div style='width:"+t.pct+"%'></div></div>")+
+    (gone
+      ? "<div class='hint' style='margin-top:8px;color:var(--red)'>本地目录已被删除，仅剩任务记录；点「删除任务」可清掉这条（<b>仅移除任务</b> 不会动其他文件）</div>"
+      : "<div class='srow'>"+
+          "<span class='si'><i>已下载</i><b>"+fmtGB(t.downloaded)+"</b><u>/ "+(t.total?fmtGB(t.total):"未知")+" GB</u></span>"+
+          "<span class='si'><i>速度</i><b>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+"</b><u>MB/s</u></span>"+
+          "<span class='si'><i>预计剩余</i><b>"+fmtEta(t.eta_sec)+"</b></span>"+
+          "<span class='si'><i>每片线程</i><b>"+t.x+"</b></span>"+
+        "</div>")+
     vbar+vprog+
-    (t.last_msg?"<div class='hint' style='margin-top:6px'>"+esc(t.last_msg)+"</div>":"")+
+    (msg?"<div class='hint' style='margin-top:6px'>"+esc(msg)+"</div>":"")+
     (act?"<ul class='files'>"+act+"</ul>":"")+
-    "<div class='ops' style='margin-top:10px'>"+opsHtml(t,i)+"</div>"+
+    "<div class='ops' style='margin-top:10px'>"+opsHtml(t,i)+foldBtn+"</div>"+
   "</div>";
 }
 
@@ -923,7 +1049,7 @@ function taskListHtml(d, tasks){
         (bad?"<span class='vflag' title='sha256 校验未通过'>⚠</span>":"")+"</td>"+
       "<td class='c-model'><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
         "<div class='rsub'>"+sub+"</div></td>"+
-      "<td class='c-prog'><div class='prow'><div class='pbar'><div style='width:"+t.pct+"%'></div></div>"+
+      "<td class='c-prog'><div class='prow'><div class='pbar"+barCls(t)+"'><div style='width:"+t.pct+"%'></div></div>"+
         "<span class='pnum'>"+t.pct.toFixed(1)+"%</span></div></td>"+
       "<td class='num' data-l='已下载/总量'>"+fmtGB(t.downloaded)+" / "+(t.total?fmtGB(t.total):"?")+"</td>"+
       "<td class='num' data-l='速度 MB/s'>"+rate+"</td>"+
@@ -1081,9 +1207,21 @@ function renderHist(hist){
   const card=$("histCard");
   if(!histList.length){ card.style.display="none"; return; }
   card.style.display="";
-  $("hist").innerHTML=histList.map((h,i)=>
-    "<div class='hist-row'><div class='hr'><b>"+esc(h.repo)+"</b><div class='ht'>"+esc(h.dest)+" · "+esc(h.at||"")+
-    "</div></div><div style='display:flex;gap:6px;align-items:center;flex-wrap:wrap'><button class='btn sm' onclick='resumeHist("+i+")'>重新下载</button><button class='btn sm' onclick='verifyHist("+i+")'>重新校验</button><button class='btn sm' onclick='openLocalDir("+i+")'>打开目录</button></div></div>").join("");
+  const dead = histList.filter(h=>h.exists===false).length;
+  $("hist").innerHTML=histList.map((h,i)=>{
+    const gone = h.exists===false;   // 目录已被删除: 重新校验/打开目录会报错, 直接禁用
+    const dis = gone ? " disabled title='本地目录已不存在'" : "";
+    return "<div class='hist-row"+(gone?" dead":"")+"'><div class='hr'><b>"+esc(h.repo)+"</b>"+
+      (gone?"<span class='dead-tag'>目录已删除</span>":"")+
+      "<div class='ht'>"+esc(h.dest)+" · "+esc(h.at||"")+"</div></div>"+
+      "<div style='display:flex;gap:6px;align-items:center;flex-wrap:wrap'>"+
+      "<button class='btn sm' onclick='resumeHist("+i+")'>重新下载</button>"+
+      "<button class='btn sm' onclick='verifyHist("+i+")'"+dis+">重新校验</button>"+
+      "<button class='btn sm' onclick='openLocalDir("+i+")'"+dis+">打开目录</button></div></div>";
+  }).join("");
+  const tag=$("histDeadTag"), btn=$("btnCleanHist");
+  if(tag){ tag.style.display = dead?"":"none"; tag.textContent = dead? dead+" 条失效" : ""; }
+  if(btn){ btn.style.display = dead?"":"none"; }
 }
 let modalTarget=null;
 function showDlModal(h){

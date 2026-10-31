@@ -64,6 +64,7 @@ _cfg.setdefault("global_j", 10)
 _cfg.setdefault("alloc_mode", "size")
 _cfg.setdefault("x", 8)  # 每分片线程数(全局, 控制台统一设置, 应用到所有任务)
 _cfg.setdefault("lan", False)  # 是否允许局域网设备访问(手机/平板); 默认仅本机
+_cfg.setdefault("no_upstream", [])  # 补全时确认上游查不到的仓库(本地自建目录), 不再重复请求
 _cfg.setdefault("access_token", "")  # 局域网访问口令(空=不校验); 本机始终免口令
 # 兼容 v2.0 旧值 "auto"(按剩余大小比例) → 新枚举名 "size"
 if _cfg.get("alloc_mode") == "auto": _cfg["alloc_mode"] = "size"
@@ -515,6 +516,48 @@ def handle_control(data, local=False):
         return {"ok": True, "started": started, "failed": failed,
                 "total": len(repos), "mode": mode}
 
+    # backfill_metadata: 为缺 .hfd/repo_metadata.json 的模型补全元数据(后台线程)
+    if action == "backfill_metadata":
+        ep = data.get("endpoint") if data.get("endpoint") in ENDPOINTS else "mirror"
+        targets = [r.strip() for r in (data.get("repos") or []) if isinstance(r, str) and r.strip()]
+        if not targets:
+            targets = [m["repo"] for m in list_models()["models"] if not m.get("total")]
+        no_up = set(_cfg.get("no_upstream") or [])
+        force = bool(data.get("force"))
+        pairs, skipped = [], 0
+        for repo in targets:
+            if repo in no_up and not force:
+                skipped += 1; continue        # 上游确认不存在(本地自建目录), 不重复请求
+            dest, err = _model_dir(repo)
+            if not dest: skipped += 1; continue
+            if metadata(dest)[0] > 0: skipped += 1; continue          # 已有可用元数据
+            with _bf_lock:
+                if _backfill.get(repo, {}).get("state") == "running": skipped += 1; continue
+                _backfill[repo] = {"state": "running", "msg": ""}
+            pairs.append((repo, dest))
+        if pairs:
+            threading.Thread(target=_backfill_worker, args=(pairs, ep), daemon=True).start()
+        return {"ok": True, "queued": len(pairs), "skipped": skipped, "total": len(targets)}
+
+    # clear_history: 清理"最近任务"; dead_only=true 只清目录已不存在的记录
+    if action == "clear_history":
+        dead_only = bool(data.get("dead_only"))
+        repos = [r for r in (data.get("repos") or []) if isinstance(r, str)]
+        with _cfg_lock:
+            before = list(_cfg.get("history", []))
+            if dead_only:
+                keep = [h for h in before if os.path.isdir(expand(h.get("dest") or ""))]
+            elif repos:
+                keep = [h for h in before if h.get("repo") not in repos]
+            else:
+                keep = []
+            removed = len(before) - len(keep)
+            if removed:
+                _cfg["history"] = keep
+                save_cfg()
+        print("[清理历史] 移除 %d 条%s，剩余 %d 条" % (removed, "（目录已失效）" if dead_only else "", len(keep)), flush=True)
+        return {"ok": True, "removed": removed, "left": len(keep)}
+
     # remove_task: 单个任务移除(可连带处理本地目录)
     if action == "remove_task":
         dest = expand((data.get("dest") or "").strip())
@@ -944,6 +987,52 @@ def tail_lines(path, n=14, max_bytes=512 * 1024):
 _deleting = {}   # repo -> {"dest", "mode", "started"}  正在删除
 _del_err = {}    # repo -> 最近一次删除失败原因
 
+# ---------------- 元数据补全 ----------------
+# 早期/中断的下载目录可能缺 .hfd/repo_metadata.json, 导致"总量未知"、模型库进度算不出、
+# size 方案分片分配退化为每任务 1 片。此处按需回填(hfd.sh 保存的是 HF API 原始响应, 格式一致)。
+_backfill = {}       # repo -> {"state": running/done/error, "msg": str}
+_bf_lock = threading.Lock()
+
+def _backfill_one(repo, dest, endpoint_key="mirror"):
+    """拉一次 HF 元数据并落盘; 返回 (ok, msg)"""
+    try:
+        data = hf_api("/api/models/%s?blobs=true" % repo, endpoint_key)
+    except urllib.error.HTTPError as e:
+        if e.code == 401: return False, "gated/私有仓库需 token"
+        if e.code == 404: return False, "仓库不存在(404)"
+        return False, "HTTP %d" % e.code
+    except Exception as e:
+        return False, "网络失败: %s" % e
+    sib = data.get("siblings") or []
+    if not sib: return False, "仓库无文件列表"
+    hd = os.path.join(dest, ".hfd")
+    try:
+        os.makedirs(hd, exist_ok=True)
+        fp = os.path.join(hd, "repo_metadata.json")
+        tmp = fp + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)   # 与 hfd.sh 落盘格式保持一致
+        os.replace(tmp, fp)
+    except OSError as e:
+        return False, "写入失败: %s" % e
+    _meta_cache.pop(dest, None); _scan_cache.pop(dest, None)   # 失效缓存, 让总量立刻生效
+    tot = sum((x.get("size") or (x.get("lfs") or {}).get("size") or 0) for x in sib)
+    return True, "%.2f GB / %d 文件" % (tot / 1e9, len(sib))
+
+def _backfill_worker(pairs, endpoint_key):
+    for repo, dest in pairs:
+        ok, msg = _backfill_one(repo, dest, endpoint_key)
+        with _bf_lock:
+            _backfill[repo] = {"state": "done" if ok else "error", "msg": msg}
+        # 404 说明上游没有这个仓库(多为本地自建目录), 记下来避免每次补全都重试一遍
+        if (not ok) and ("404" in msg):
+            with _cfg_lock:
+                if repo not in _cfg["no_upstream"]:
+                    _cfg["no_upstream"].append(repo); save_cfg()
+        print("[补全元数据] %s -> %s" % (repo, msg), flush=True)
+        time.sleep(0.2)   # 轻微间隔, 避免连续打镜像
+
+
 def _model_dir(repo):
     """把 org/name 解析为根目录下的真实子目录; 非法输入/越界/软链一律拒绝"""
     if not isinstance(repo, str) or not re.match(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$", repo):
@@ -1107,14 +1196,18 @@ def _safe_task_dest(dest):
 # ---------------- 本地模型库 ----------------
 def _models_resp(models, total, truncated):
     """统一 /api/models 返回结构; 附带"正在删除"与"删除失败原因", 供前端标注与提示"""
+    bf_running = sum(1 for v in _backfill.values() if v.get("state") == "running")
     return {"models": models, "total": total, "truncated": truncated, "limit": MAX_MODELS_LIST,
             "deleting": {r: v.get("mode", "trash") for r, v in _deleting.items()},
-            "delete_errors": dict(_del_err)}
+            "delete_errors": dict(_del_err),
+            "backfill": {"running": bf_running, "total": len(_backfill),
+                         "errors": {r: v["msg"] for r, v in _backfill.items() if v.get("state") == "error"}}}
 
 def list_models():
     """列出本地模型库: 按最近活动时间倒序(有元数据用其 mtime, 否则用目录 mtime)。
     不再静默截断——超过 MAX_MODELS_LIST 时返回 truncated/total, 由前端明确提示"未全部显示"。"""
     root = expand(_cfg["default_root"]); out = []
+    no_up_set = set(_cfg.get("no_upstream") or [])
     if not os.path.isdir(root):
         return _models_resp([], 0, False)
     try: orgs = sorted(os.listdir(root))
@@ -1152,7 +1245,9 @@ def list_models():
                 dt = time.strftime("%m-%d %H:%M", time.localtime(mtime))
             out.append({"repo": f"{org}/{name}", "bytes": bytes_, "total": tot,
                         "pct": min(100.0, bytes_ / tot * 100) if tot else 0,
-                        "state": state, "date": dt, "verify": v, "_mtime": mtime})
+                        "state": state, "date": dt, "verify": v, "_mtime": mtime,
+                        # local_only: 上游查不到该仓库(本地自建/已删除), 前端据此改显示"本地目录"而非"总量未知"
+                        "local_only": (not tot) and (f"{org}/{name}" in no_up_set)})
     out.sort(key=lambda m: -m["_mtime"])   # 最近有活动的排前面
     total = len(out)
     shown = out[:MAX_MODELS_LIST]
@@ -1166,8 +1261,13 @@ def status_json():
     first_run = next((t for t in tasks.values() if t.get("want_run")), None)
     if first_run:
         model_log = tail_lines(os.path.join(first_run["dest"], ".hfd", "download.log"))
+    # 历史条目附 exists: 目录已被删除的条目前端标灰并禁用"重新校验/打开目录"
+    hist = []
+    for h in _cfg.get("history", [])[:10]:
+        d = expand(h.get("dest") or "")
+        hist.append({**h, "exists": bool(d) and os.path.isdir(d)})
     resp = {"cfg": public_cfg(), "tasks": [], "log": read_log(), "dl_running": dl_running(),
-            "rate": window_rate(), "history": _cfg.get("history", [])[:10], "queue": _cfg.get("queue", []),
+            "rate": window_rate(), "history": hist, "queue": _cfg.get("queue", []),
             "model_log": model_log,
             "disk_free": disk_free(_cfg.get("default_root")),
             "rate_hist": rate_hist_list(),
@@ -1185,6 +1285,7 @@ def status_json():
         resp["tasks"].append({
             "repo": t["repo"], "dest": dest, "endpoint": t["endpoint"],
             "x": t["x"], "j": t["j"], "gated": t.get("gated"),
+            "exists": os.path.isdir(dest),   # 目录被删后任务记录会残留, 前端需明确标注而非显示 0%
             "want_run": bool(t.get("want_run")), "alive": _pg_alive(t.get("pgid")),
             "phase": phase, "phase_msg": phmsg,
             "verify_prog": [vdone, vtotal] if phase == "verifying" else None,
