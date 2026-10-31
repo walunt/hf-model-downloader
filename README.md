@@ -33,7 +33,7 @@
 9. 标题栏右侧可切换**浅色 / 深色主题**，选择会记住；「本地模型库」标题有搜索框，输入即过滤（只影响显示，删除等按钮仍指向正确模型）
 10. 任务卡片有「打开目录」（折叠卡显示「打开」），一键在访达中打开模型所在文件夹；「下载队列」支持多选，可一次移除多个待下载任务
    - 「下载任务」标题右侧可切换 **卡片 / 列表** 两种视图：卡片看单个任务的细节（分片、进行中文件），列表是紧凑表格，一眼横比所有任务的状态/进度/速度/剩余/分片；选择记在本机浏览器里，下次打开沿用
-7. 想清理磁盘：「本地模型库」每行右侧有「删除」，可选两个动作
+11. 想清理磁盘：「本地模型库」每行右侧有「删除」，可选两个动作
    - **移到废纸篓**（推荐）：同卷 `rename`，百 GB 也是秒级，可在废纸篓里恢复，清空废纸篓后才真正释放空间
    - **彻底删除**：直接抹除、不可恢复，空间立即释放（会有二次确认）
    - 正在下载或在队列中的模型不允许删除；删除后对应的下载任务条目会自动清除（「最近任务」仍保留，可一键重新下载）
@@ -67,6 +67,8 @@
 | 访问口令 | `lan` 开启后可设口令；非本机请求必须带正确口令，错误口令延时 0.35s 拖慢暴力尝试；口令只在本机可见/可改 |
 | CSRF | Host/Origin 白名单 = 本机回环 + 本机所有 IPv4，伪造 Host 返回 403 |
 | 静态资源 | 仅暴露 `manifest.webmanifest` 与 `assets/`，`realpath` 前缀校验防路径穿越 |
+| 打开目录 | `open_dir` 只允许打开模型库根目录内、或任务/历史已记录的目录 |
+| 已知限制 | 首页 `dashboard.html` 在局域网下**不做鉴权**（可下载页面源码了解接口结构，不含秘密）；详见「项目开发进度.md」第六节 |
 | 防误入库 | `.gitignore` 屏蔽 `*.hfd/`、`aria2c_urls.txt`、`last_download_command`、模型权重与凭证文件 |
 | 提交守卫 | `.githooks/pre-commit`（已启用）：暂存区出现 token/私钥形态或模型元数据即拒绝提交 |
 > 图标资源在 `assets/`（`apple-touch-icon.png` 180×180 等），清单为 `manifest.webmanifest`。
@@ -92,8 +94,12 @@
 | `legacy/download_dsv4_vision.sh` | 早期一次性专用脚本（已归档，通用任务用 `hf_download.sh`） |
 | `安装/卸载开机守护.command` | 注册/移除 LaunchAgent（部署运行时到 Application Support） |
 | `localhost.crt/key` | 本地 https 自签名证书 |
-| `dl_config.json` | 持久化配置（默认路径、当前任务、历史） |
-| `download.log` | 下载主日志 |
+| `启动下载器.command` | 双击临时启动（不开守护时用） |
+| `assets/` + `manifest.webmanifest` | PWA 图标与清单（添加到主屏幕用） |
+| `.githooks/pre-commit` | 提交守卫：拦 token/私钥/模型文件，并做 py/sh 语法检查 |
+| `hf-model-download-skill/` | 独立的 Agent Skill 副本（服务端不使用；其中 `hfd.sh` 为旧版，勿单独跑） |
+| `dl_config.json` | 持久化配置（默认路径、当前任务、历史、访问口令）。**运行时目录下的那份才是权威** |
+| `server.log` / `download.log` | 服务日志 / 下载主日志（守护模式下在 Application Support 目录） |
 
 > 守护模式的实际运行目录是 `~/Library/Application Support/hf-model-downloader/`（含其独立的 dl_config.json / server.log / download.log）；模型数据仍在 `~/mlx-models`。
 
@@ -105,4 +111,5 @@
 - 「本地模型库」按最近活动时间倒序排列（最近下载/续传的在前），卡片标题显示总数；超过 200 个时提示仅显示最近 200 个，不会静默隐藏
 - 控制台按钮按运行状态自动启用/禁用；日志支持「只看问题」过滤与「清空显示」；控制口仅接受本机来源请求（校验 Host/Origin，防其他网页 CSRF）
 - 依赖：`brew install aria2 wget`；token 存于 `~/.huggingface/token`（权限 600）
+- **已知行为**：配置了 HF Token 后，即便下载公开仓库，`analyze` 也会把 `Authorization` 头发给当前下载源（含第三方镜像 `hf-mirror.com`）；介意的话可临时清空 token 或改用官方直连
 - 移动端（≤640px）已适配：输入框 16px 字号（防 iOS 聚焦自动放大）、按钮触控区 ≥36px、列表视图自动转为堆叠块（不再横向滚动）、安全区留白 `env(safe-area-inset-*)`

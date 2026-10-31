@@ -87,7 +87,7 @@ done
 generate_command_string() {
     printf 'REPO_ID=%s TOOL=%s INCLUDE=%s EXCLUDE=%s DATASET=%s HF_USERNAME=%s HF_TOKEN=%s HF_ENDPOINT=%s REVISION=%s' \
         "$REPO_ID" "$TOOL" "${INCLUDE_PATTERNS[*]}" "${EXCLUDE_PATTERNS[*]}" "${DATASET:-0}" \
-        "${HF_USERNAME:-}" "${HF_TOKEN:-}" "${HF_ENDPOINT:-}" "$REVISION"
+        "${HF_USERNAME:-}" "${HF_TOKEN:+set}" "${HF_ENDPOINT:-}" "$REVISION"
 }
 
 check_command() {
