@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HuggingFace 模型下载器</title>
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --line:#263048; --txt:#e6ebf5; --dim:#8b96ad; --acc:#4f8cff; --ok:#38c172; --warn:#e0a030; --red:#e0556b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font:14px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif; padding:24px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  h1 { font-size:18px; font-weight:600; margin-bottom:4px; }
+  .ver { font-size:11px; font-weight:400; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:2px 9px; margin-left:8px; vertical-align:middle; }
+  .sub { color:var(--dim); font-size:12px; margin-bottom:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  h2 { font-size:13px; color:var(--dim); margin:0 0 12px; font-weight:500; display:flex; align-items:center; gap:10px; }
+  input[type=text], input[type=number], select { background:#10162a; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 11px; font-size:13px; outline:none; }
+  input[type=text]:focus, select:focus { border-color:var(--acc); }
+  .grow { flex:1; min-width:0; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+  .btn { background:#10162a; color:var(--txt); border:1px solid var(--line); border-radius:8px; padding:9px 15px; font-size:13px; cursor:pointer; }
+  .btn:hover { border-color:var(--acc); }
+  .btn.primary { background:linear-gradient(90deg,#2f6bff,#4f8cff); border-color:transparent; color:#fff; font-weight:600; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .btn.sm { padding:6px 11px; font-size:12px; }
+  .badge { font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
+  .badge.run { color:var(--ok); border-color:#1f5c38; background:#0f2419; }
+  .badge.stop { color:var(--warn); border-color:#5c471f; background:#241d0f; }
+  .badge.verify { color:var(--warn); border-color:#5c471f; background:#241d0f; }
+  .badge.bad { color:var(--red); border-color:#5c2230; background:#240f14; }
+  .tag { font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--dim); }
+  .tag.gated { color:var(--warn); border-color:#5c471f; }
+  .info { background:#10162a; border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px; font-size:13px; display:none; }
+  .info .kv { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:8px 0; }
+  .info .kv div { background:#0c1120; border-radius:7px; padding:8px 10px; }
+  .info .kv .k { font-size:11px; color:var(--dim); } .info .kv .v { font-size:15px; font-weight:600; }
+  .err { color:var(--red); font-size:13px; margin-top:8px; }
+  .top { display:flex; align-items:baseline; gap:12px; }
+  .repo { font-size:15px; font-weight:600; word-break:break-all; }
+  .pct { font-size:34px; font-weight:700; letter-spacing:-1px; }
+  .pct small { font-size:16px; color:var(--dim); font-weight:500; }
+  .stat { margin-left:auto; text-align:right; font-size:12px; color:var(--dim); }
+  .bar { height:12px; background:#0c1120; border:1px solid var(--line); border-radius:99px; margin:12px 0 10px; overflow:hidden; }
+  .bar > div { height:100%; width:0%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  .cell { background:#10162a; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .cell .k { font-size:11px; color:var(--dim); } .cell .v { font-size:15px; font-weight:600; margin-top:2px; }
+  .cell .v small { font-size:11px; color:var(--dim); font-weight:400; }
+  .files { list-style:none; margin-top:6px; }
+  .files li { display:block; font-size:12px; padding:6px 0; border-bottom:1px dashed #202a42; }
+  .files li:last-child { border-bottom:none; }
+  .frow { display:flex; justify-content:space-between; gap:12px; }
+  .files .n { color:#c6d2ea; font-family:ui-monospace,Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .files .s { color:var(--dim); margin-left:12px; white-space:nowrap; }
+  .mini { height:6px; background:#0c1120; border:1px solid #1b2540; border-radius:99px; margin-top:4px; overflow:hidden; }
+  .mini > div { height:100%; background:linear-gradient(90deg,#2f6bff,#5aa8ff); border-radius:99px; transition:width .8s ease; }
+  #log { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#9fb3d9; background:#0c1120; border:1px solid var(--line); border-radius:8px; padding:10px; height:160px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
+  .lib-item { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  .lib-item:last-child { border-bottom:none; }
+  .lib-item .lib-state { flex-shrink:0; }
+  .lib-item .lib-name { flex:1; min-width:0; word-break:break-all; }
+  .lib-item .lib-meta { flex-shrink:1; text-align:right; }
+  .lib-item .lib-btn { flex-shrink:0; white-space:nowrap; }
+  .hint { color:var(--dim); font-size:11px; }
+  label.inl { font-size:13px; display:flex; align-items:center; gap:6px; }
+  .msg { font-size:12px; color:var(--acc); margin-top:8px; min-height:16px; }
+  .vbar { font-size:12px; border-radius:8px; padding:8px 12px; margin-top:10px; border:1px solid var(--line); background:#10162a; }
+  .vbar.ok { color:var(--ok); border-color:#1f5c38; background:#0f2419; }
+  .vbar.bad { color:var(--red); border-color:#5c2230; background:#240f14; }
+  .hist-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  .hist-row:last-child { border-bottom:none; }
+  .hist-row .hr { flex:1; min-width:0; }
+  .hist-row .hr b { font-weight:500; word-break:break-all; }
+  .hist-row .ht { color:var(--dim); font-size:11px; }
+  .ratechart { margin:14px 0 4px; background:#0c1120; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .ratechart .k { font-size:11px; color:var(--dim); display:flex; justify-content:space-between; }
+  #rateCanvas { width:100%; height:52px; display:block; margin-top:4px; }
+  .q-row { display:flex; align-items:center; gap:10px; font-size:12px; padding:7px 0; border-bottom:1px dashed #202a42; }
+  .q-row:last-child { border-bottom:none; }
+  .q-row .qn { flex:1; min-width:0; } .q-row .qn b { font-weight:500; word-break:break-all; }
+  .q-no { color:var(--acc); font-size:11px; margin-right:2px; }
+  .diskline { font-size:12px; margin-top:8px; }
+  .diskline.ok { color:var(--ok); } .diskline.bad { color:var(--red); }
+  .task { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; background:#141b2b; }
+  .task:last-child { margin-bottom:0; }
+  .task .ops { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  #toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:99;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 18px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transition:opacity .25s;pointer-events:none;max-width:80vw;text-align:center;}
+  #toast.show{opacity:1;}
+  #toast.ok{color:var(--ok);border-color:#1f5c38;}
+  #toast.bad{color:var(--red);border-color:#5c2230;}
+  @media (max-width:640px){
+    .grid, .info .kv { grid-template-columns:repeat(2,1fr); }
+    body { padding:14px; } .card { padding:14px; }
+  }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<div id="dlModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:440px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.5)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">本地已存在该模型</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:14px;white-space:pre-wrap;word-break:break-all" id="dlModalBody">--</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" id="dlModalCancel">取消</button>
+      <button class="btn" id="dlModalVerify">仅校验</button>
+      <button class="btn primary" id="dlModalRe">彻底重新下载</button>
+    </div>
+  </div>
+</div>
+<div class="wrap">
+  <h1>HuggingFace 模型下载器<span class="ver">v2.26 · 本系统由核桃制作</span></h1>
+  <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
+
+  <!-- 新建下载 -->
+  <div class="card">
+    <h2>新建下载</h2>
+    <div class="row">
+      <input class="grow" id="repoInput" type="text" placeholder="粘贴 HuggingFace 地址或仓库 ID，例如 mlx-community/Qwen2.5-7B-Instruct-4bit">
+      <select id="analyzeEp">
+        <option value="mirror">用 hf-mirror 分析</option>
+        <option value="direct">用 huggingface.co 分析</option>
+      </select>
+      <button class="btn" id="analyzeBtn">分析</button>
+    </div>
+    <div class="row">
+      <span class="tag" id="tokenTag2">token --</span>
+      <span class="hint">Token 在「默认设置」中管理</span>
+    </div>
+    <div class="err" id="analyzeErr"></div>
+    <div class="info" id="analyzeInfo">
+      <div><span class="tag" id="aiRepo">--</span> <span class="tag" id="aiGated" style="display:none">gated 需授权</span></div>
+      <div class="kv">
+        <div><div class="k">总大小</div><div class="v" id="aiSize">--</div></div>
+        <div><div class="k">文件数</div><div class="v" id="aiFiles">--</div></div>
+      </div>
+      <div class="row">
+        <span class="hint" style="width:64px">保存到</span>
+        <input class="grow" id="aiDest" type="text">
+        <label class="inl"><input type="radio" name="aiep" value="mirror" checked>镜像</label>
+        <label class="inl"><input type="radio" name="aiep" value="direct">直连</label>
+        <button class="btn primary" id="startBtn">开始下载</button>
+        <button class="btn" id="enqBtn">加入队列</button>
+      </div>
+      <div class="diskline" id="aiDisk"></div>
+      <div class="hint">保存路径默认 = 默认根目录/仓库ID；gated 仓库会自动使用 ~/.huggingface/token。分片数与每片线程数由「下载控制台」统一设置；并发已满时自动进入队列等待。</div>
+    </div>
+  </div>
+
+  <!-- 下载队列 -->
+  <div class="card" id="queueCard" style="display:none">
+    <h2>下载队列 <button class="btn sm" id="clearQ" style="margin-left:auto">清空</button></h2>
+    <div class="hint" style="margin-bottom:6px">同时下载的模型数有空位时，按顺序自动开始下一个。</div>
+    <div id="queue"></div>
+  </div>
+
+  <!-- 下载任务 -->
+  <div class="card" id="tasksCard">
+    <h2>下载任务 <span id="taskCount" class="badge">0 个</span></h2>
+    <div class="ratechart">
+      <div class="k"><span>最近 30 分钟总下载速度</span><span id="rateStat">--</span></div>
+      <canvas id="rateCanvas"></canvas>
+    </div>
+    <div id="noTasks" class="hint" style="margin-top:12px">暂无下载任务，在上方新建；或从「最近任务」继续。</div>
+    <div id="tasks" style="margin-top:6px"></div>
+  </div>
+
+  <!-- 控制台 -->
+  <div class="card">
+    <h2>下载控制台</h2>
+    <div class="row">
+      <span class="hint" style="width:100px">全局分片池</span>
+      <select id="cGlobalJ" style="padding:6px 10px"></select>
+      <span class="hint">所有任务合计最多同时下载 N 个分片（1–10），每任务至少 1 个</span>
+    </div>
+    <div class="row">
+      <span class="hint" style="width:100px">每分片线程数</span>
+      <select id="cX" style="padding:6px 10px"></select>
+      <span class="hint">每个分片用 N 个线程下载（1–10），保存后应用到所有任务</span>
+    </div>
+    <div class="row">
+      <span class="hint" style="width:100px">同时下载模型数</span>
+      <select id="cMaxModels" style="padding:6px 10px"></select>
+      <span class="hint">最多 5 个模型同时下载，超出自动排队</span>
+    </div>
+    <div class="row">
+      <span class="hint" style="width:100px">分片分配</span>
+      <select id="cAllocMode" style="padding:6px 10px">
+        <option value="size">自动：按剩余大小比例（大模型优先）</option>
+        <option value="small">自动：小模型优先</option>
+        <option value="manual">手动：每个任务单独指定</option>
+      </select>
+      <span class="hint" id="allocHint">剩余待下载量大的任务分到更多分片</span>
+    </div>
+    <div class="row">
+      <span class="hint" style="width:100px">下载限速</span>
+      <input id="setSpeed" type="number" min="0" placeholder="0 = 不限" style="width:110px">
+      <span class="hint">MB/s</span>
+      <select id="speedQuick" title="快捷档位" style="padding:4px 8px;font-size:12px;background:#10162a;color:var(--txt);border:1px solid var(--line);border-radius:6px">
+        <option value="">快捷档位</option>
+        <option value="0">0 不限</option>
+        <option value="20">20 MB/s</option>
+        <option value="40">40 MB/s</option>
+        <option value="60">60 MB/s</option>
+        <option value="80">80 MB/s</option>
+        <option value="100">100 MB/s</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" id="saveConsoleBtn">保存并应用</button>
+      <span class="hint">保存后即时生效：限速/线程数/分片变化会自动重启对应下载任务（断点续传，进度不丢）；并发模型数调大可立即补位队列</span>
+    </div>
+    <div class="msg" id="cmsg"></div>
+  </div>
+
+  <!-- 最近任务 -->
+  <div class="card" id="histCard" style="display:none">
+    <h2>最近任务</h2>
+    <div id="hist"></div>
+  </div>
+
+  <!-- 设置 -->
+  <div class="card">
+    <h2>默认设置</h2>
+    <div class="row">
+      <span class="hint" style="width:84px">默认保存根目录</span>
+      <input class="grow" id="setRoot" type="text">
+    </div>
+    <div class="hint" style="margin-top:4px">新模型默认保存到「根目录/组织/模型名」</div>
+    <div class="row" style="margin-top:8px">
+      <span class="hint" style="width:84px">HF 用户名</span>
+      <input class="grow" id="setUser" type="text" placeholder="gated 仓库需要，可填 HF 用户名">
+      <span class="tag" id="tokenTag">token --</span>
+      <button class="btn sm" id="setTokenBtn">输入 token</button>
+    </div>
+    <div class="hint" style="margin-top:4px">token 从 ~/.huggingface/token 读取，不会显示。</div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="saveSetBtn">保存设置</button>
+      <span class="hint">保存后新下载的模型使用以上设置</span>
+    </div>
+    <div class="msg" id="setmsg"></div>
+  </div>
+
+  <!-- 本地模型库 -->
+  <div class="card">
+    <h2>本地模型库 <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
+    <div id="lib"><span class="hint">读取中…</span></div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card">
+    <h2>下载日志
+      <select id="logSrc" style="padding:4px 8px;font-size:12px;background:#10162a;color:var(--txt);border:1px solid var(--line);border-radius:6px">
+        <option value="main">主日志</option>
+        <option value="model">模型日志（第一个运行中任务）</option>
+      </select>
+      <label class="inl" style="margin-left:auto"><input type="checkbox" id="logErrOnly"> 只看问题</label>
+      <button class="btn sm" id="logClear">清空显示</button>
+    </h2>
+    <div id="log">加载中…</div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmtGB = b => (b/1e9).toFixed(2);
+const fmtAuto = b => b >= 1e9 ? (b/1e9).toFixed(2)+" GB" : b >= 1e6 ? (b/1e6).toFixed(1)+" MB" : (b/1e3).toFixed(0)+" KB";
+const fmtEta = s => { if(!s||s<=0||!isFinite(s)) return "--"; const h=Math.floor(s/3600),m=Math.floor(s%3600/60); return h>0?h+" 小时 "+m+" 分":m+" 分钟"; };
+const epName = e => e==="direct" ? "huggingface.co 直连" : "hf-mirror 镜像";
+let toastTimer=null;
+function toast(msg, ok=true){   // 全局浮层提示, 2.6s 后自动消失
+  const t=$("toast"); if(!t) return;
+  t.textContent=msg; t.className="show "+(ok?"ok":"bad");
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>{ t.className=""; },2600);
+}
+let CONC_MAX=10;
+function buildConsoleOptions(maxConn, maxModels, gj, mm, x, mode){
+  const gjEl=$("cGlobalJ"), curGj=gjEl.value||gj; gjEl.innerHTML="";
+  for(let i=1;i<=maxConn;i++) gjEl.add(new Option(i+" 分片",i));
+  if(curGj) gjEl.value=curGj;
+  const xEl=$("cX"), curX=xEl.value||x; xEl.innerHTML="";
+  for(let i=1;i<=maxConn;i++) xEl.add(new Option(i+" 线程",i));
+  if(curX) xEl.value=curX;
+  const mmEl=$("cMaxModels"), curMm=mmEl.value||mm; mmEl.innerHTML="";
+  for(let i=1;i<=maxModels;i++) mmEl.add(new Option(i+" 个",i));
+  if(curMm) mmEl.value=curMm;
+  $("cAllocMode").value=mode||"size";
+}
+let analyzed = null;
+function syncTokenTag(has){
+  const txt = "token "+(has?"已保存 ✓":"未设置");
+  ["tokenTag","tokenTag2"].forEach(id=>{ const el=$(id); if(el){ el.textContent=txt; el.style.color=has?"var(--ok)":"var(--warn)"; } });
+}
+
+async function post(body){
+  const r = await fetch("/api/control",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  return await r.json();
+}
+
+// ---- 分析 ----
+$("analyzeBtn").onclick = async () => {
+  const repo=$("repoInput").value; $("analyzeErr").textContent=""; $("analyzeInfo").style.display="none";
+  $("analyzeBtn").disabled=true; $("analyzeBtn").textContent="分析中…";
+  const d = await post({action:"analyze", repo, endpoint:$("analyzeEp").value});
+  $("analyzeBtn").disabled=false; $("analyzeBtn").textContent="分析";
+  if(!d.ok){ $("analyzeErr").textContent="分析失败："+d.error+(String(d.error).includes("token")?"  → 请在「默认设置」中点击「输入 token」保存后重试":""); return; }
+  analyzed=d;
+  $("repoInput").value="";  // 分析成功即清空输入框, 下次粘贴新链接无需手动删除
+  $("analyzeInfo").style.display="block";
+  $("aiRepo").textContent=d.repo;
+  const gated=(d.gated && d.gated!==false);
+  $("aiGated").style.display = gated ? "inline-block":"none";
+  $("aiGated").textContent = gated && !d.has_token ? "gated · 需填 token" : "gated 已授权";
+  $("aiSize").textContent=fmtAuto(d.total);
+  $("aiFiles").textContent=d.files;
+  $("aiDest").value=d.dest;
+  const dl=$("aiDisk");
+  if(d.disk_free){ const need2=2*(d.total||0), ok=!need2||d.disk_free>=need2;
+    dl.className="diskline "+(ok?"ok":"bad");
+    dl.textContent="目标盘可用 "+fmtAuto(d.disk_free)+" · 模型大小 "+fmtAuto(d.total||0)+
+      (need2?" · 建议预留 "+fmtAuto(need2)+(ok?"（充足）":"（空间偏紧）"):""); }
+  else dl.textContent="";
+  document.querySelector('input[name=aiep][value='+$("analyzeEp").value+']').checked=true;
+  syncTokenTag(d.has_token);
+}
+
+// ---- 开始下载 / 加入队列 ----
+async function startOrEnqueue(enqueue){
+  if(!analyzed) return;
+  const ep=document.querySelector('input[name=aiep]:checked').value;
+  const body={action:enqueue?"enqueue":"start_new", repo:analyzed.repo, dest:$("aiDest").value,
+              endpoint:ep};
+  if(enqueue) body.total=analyzed.total, body.files=analyzed.files;
+  if(!enqueue){
+    const sizeTxt=analyzed.total?fmtAuto(analyzed.total):"大小未知";
+    if(!confirm("将下载 "+analyzed.repo+"（"+sizeTxt+"）到\n"+$("aiDest").value+"\n分片数由全局分片池自动分配。继续？")) return;
+  }
+  const btn=$(enqueue?"enqBtn":"startBtn");
+  btn.disabled=true;
+  let d=await post(body);
+  if(!enqueue && d.code==="queue_conflict"){
+    // 检测到与下载队列/任务重复: 由用户选择是否移除并重新下载
+    const go=confirm("检测到该模型已在下载队列/任务中："+d.dup_repo+"\n重新下载将从队列移除该任务并立即开始。\n是否重新下载？");
+    if(!go){ btn.disabled=false; toast("已取消，未重新下载", false); return; }
+    d=await post({...body, force:true});
+  }
+  btn.disabled=false;
+  if(!d.ok) toast((enqueue?"加入队列失败":"启动失败")+"："+d.error, false);
+  else if(enqueue) toast("✔ 已加入队列："+analyzed.repo+(d.need_fill?"，有空位已自动开始":""));
+  else toast(d.queued?"✔ 已加入队列等待："+analyzed.repo:"✔ 已开始下载 "+analyzed.repo);
+  refresh();
+}
+$("startBtn").onclick=()=>startOrEnqueue(false);
+$("enqBtn").onclick=()=>startOrEnqueue(true);
+
+// ---- 控制台（全局分片池 / 并发模型数 / 分配模式 / 限速）----
+$("cAllocMode").onchange=()=>{
+  const v=$("cAllocMode").value;
+  $("allocHint").textContent = v==="size" ? "剩余待下载量大的任务分到更多分片"
+    : v==="small" ? "剩余待下载量小的任务先分满，尽快完成释放并发名额"
+    : "每个下载任务卡片上会出现分片选择框（总和 ≤ 全局分片池）";
+};
+$("saveConsoleBtn").onclick=async()=>{
+  const btn=$("saveConsoleBtn"); btn.disabled=true; const o=btn.textContent; btn.textContent="保存中…";
+  const d=await post({action:"set_config", global_j:+$("cGlobalJ").value, max_models:+$("cMaxModels").value,
+                      alloc_mode:$("cAllocMode").value, x:+$("cX").value,
+                      speed_limit:+($("setSpeed").value)||0});
+  btn.disabled=false; btn.textContent=o;
+  if(d.ok) $("cmsg").textContent="已保存并应用"+(d.restarted?" · 下载中任务已按新设置自动重启（断点续传）":"")+" · 并发模型数 "+d.cfg.max_models;
+  else $("cmsg").textContent="保存失败："+d.error;
+  $("cmsg").style.color = d.ok ? "var(--acc)" : "var(--red)";
+  setTimeout(()=>$("cmsg").textContent="", 5000);
+  refresh();
+};
+
+// ---- 设置 ----
+$("saveSetBtn").onclick=async()=>{
+  const d=await post({action:"set_config", default_root:$("setRoot").value, username:$("setUser").value});
+  $("setmsg").textContent=d.ok?"已保存":"保存失败："+(d.error||"");
+  $("setmsg").style.color = d.ok ? "var(--acc)" : "var(--red)";
+  setTimeout(()=>$("setmsg").textContent="",3500);
+  if(d.ok && analyzed){ analyzed.dest=$("setRoot").value.replace(/\/+$/,"")+"/"+analyzed.repo; $("aiDest").value=analyzed.dest; }
+}
+$("setTokenBtn").onclick=async()=>{
+  const v=prompt("请输入 HF Token（read 权限即可；将保存到 ~/.huggingface/token，不会回显）：");
+  if(v===null) return;
+  const t=v.trim();
+  if(!t){ toast("已取消，未修改 token", false); return; }
+  const d=await post({action:"set_config", token:t});
+  if(d.ok){ toast("✔ Token 已保存"); syncTokenTag(true); }
+  else toast("保存失败："+d.error, false);
+};
+$("speedQuick").onchange=()=>{ if($("speedQuick").value!==""){ $("setSpeed").value=$("speedQuick").value; $("speedQuick").value=""; } };
+
+// ---- 本地模型库 ----
+let libModels=[];
+async function loadLib(){
+  try{ const r=await fetch("/api/models"); const d=await r.json();
+    if(!d.models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
+    libModels=d.models;
+    $("lib").innerHTML=d.models.map((m,i)=>{
+      const st = m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:#1f5c38">✔ 完整</span>'
+               : m.state==="bad" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">⚠ 校验未过</span>'
+               : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 下载失败</span>'
+               : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 校验中</span>'
+               : '<span class="tag">下载中/未校验</span>';
+      const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
+      return "<div class='lib-item'><span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
+        fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%":"")+(m.date?" · "+esc(m.date):"")+vd+
+        "</span><button class='btn sm lib-btn' onclick='openModelCard("+i+")'>模型卡片</button></div>";
+    }).join("");
+  }catch(e){ $("lib").textContent="读取失败: "+e.message; }
+}
+function openModelCard(i){
+  const m=libModels[i]; if(!m) return;
+  window.open("https://hf-mirror.com/"+m.repo, "_blank");
+}
+$("refreshLib").onclick=loadLib;
+
+// ---- 状态刷新（多任务）----
+let lastTasks=[];
+async function refresh(){
+  try{
+    const r=await fetch("/api/status",{cache:"no-store"}); const d=await r.json();
+    if(d.cfg){
+      if(!$("setRoot").value) $("setRoot").value=d.cfg.default_root;
+      if(!$("setUser").value) $("setUser").value=d.cfg.username||"";
+      if($("setSpeed").value==="" && d.cfg.speed_limit) $("setSpeed").value=d.cfg.speed_limit;
+      syncTokenTag(d.cfg.has_token);
+      buildConsoleOptions(d.consts.max_conn, d.consts.max_models_limit,
+                          d.cfg.global_j, d.cfg.max_models, d.cfg.x, d.cfg.alloc_mode);
+    }
+    renderTasks(d);
+    renderQueue(d.queue);
+    renderHist(d.history);
+    lastLogs=d.log; modelLogs=d.model_log||[]; renderLog();
+  }catch(e){ $("log").textContent="无法连接服务器: "+e.message; }
+}
+
+function taskBadge(t, dlRunning){
+  // 状态优先级: 失败 > 校验中 > 运行中 > 已完成 > 已暂停 > 等待
+  if(t.phase==="failed") return {txt:"✕ "+(t.phase_msg||"失败"), cls:"bad"};
+  if(t.want_run && t.alive){
+    if(t.phase==="verifying") return {txt:"◌ 校验中"+(t.verify_prog?(" "+t.verify_prog[0]+"/"+t.verify_prog[1]):""), cls:"verify"};
+    return {txt:"● 下载中", cls:"run"};
+  }
+  if(!t.want_run){
+    if(t.verify && !t.verify.bad && !t.verify.miss && t.verify.ok===t.verify.total) return {txt:"✔ 已完成", cls:"run"};
+    return {txt:"■ 已暂停", cls:"stop"};
+  }
+  // want_run 但进程不在: 完成 / 等待自动重启
+  if(t.verify && !t.verify.bad && !t.verify.miss && t.verify.ok===t.verify.total) return {txt:"✔ 已完成", cls:"run"};
+  if(t.pct>=99.99 && t.downloaded>=t.total-1048576) return {txt:"✔ 已完成", cls:"run"};
+  return {txt:"○ 等待中", cls:"stop"};
+}
+
+function renderTasks(d){
+  const tasks=d.tasks||[];
+  lastTasks=tasks;
+  $("taskCount").textContent=tasks.length+" 个";
+  $("noTasks").style.display=tasks.length?"none":"";
+  const manual = d.cfg.alloc_mode==="manual";
+  const pool = d.cfg.global_j||10;
+  const div=$("tasks");
+  div.innerHTML = tasks.map((t,i)=>{
+    const bd=taskBadge(t, d.dl_running);
+    const destTxt=esc(t.dest||"");
+    // 手动方案: 分片选择(change 时提交); 自动方案: 只读显示
+    let jHtml;
+    if(manual){
+      let opts="";
+      for(let j=1;j<=pool;j++) opts+="<option value='"+j+"'"+(t.j===j?" selected":"")+">"+j+" 分片</option>";
+      jHtml="<select class='jsel' data-dest=\""+esc(t.dest)+"\" style='padding:3px 6px;font-size:12px'>"+opts+"</select>";
+    } else {
+      jHtml="<span style='font-weight:600'>"+t.j+"</span>";
+    }
+    const vbar = t.verify ? (t.verify.bad||t.verify.miss||t.verify.ok!==t.verify.total
+      ? "<div class='vbar bad'>⚠ 校验：通过 "+t.verify.ok+"/"+t.verify.total+"，损坏 "+(t.verify.bad||0)+"、缺失 "+(t.verify.miss||0)+"</div>"
+      : "<div class='vbar ok'>✔ sha256 校验通过 "+t.verify.ok+"/"+t.verify.total+(t.verify.ts?"（"+esc(t.verify.ts)+"）":"")+"</div>") : "";
+    const vprog = t.phase==="verifying" && t.verify_prog
+      ? "<div class='mini' style='margin-top:8px'><div style='width:"+(t.verify_prog[1]?(t.verify_prog[0]/t.verify_prog[1]*100).toFixed(0):0)+"%'></div></div>" : "";
+    const act = (t.active||[]).map(f=>"<li><div class='frow'><span class='n'>"+esc(f.name)+"</span><span class='s'>"+
+      fmtGB(f.bytes)+" / "+fmtGB(f.size)+" GB · "+f.pct.toFixed(0)+"%</span></div>"+
+      "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
+    const ops =
+      "<button class='btn sm' onclick='taskOp(\"stop\","+i+")'"+(t.want_run?"":" disabled")+">暂停</button>"+
+      "<button class='btn sm' onclick='taskOp(\"start\","+i+")'"+(t.want_run?" disabled":"")+">继续</button>";
+    return "<div class='task'>"+
+      "<div class='top'><div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
+      "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
+      "<div class='hint' style='cursor:pointer;word-break:break-all' title='点击复制本地路径' onclick='copyPath(\""+i+"\")'>"+destTxt+"</div>"+
+      "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(2)+"<small>%</small></div>"+
+      "<div class='stat' style='font-size:11px'>分片 "+jHtml+"<span style='color:var(--dim)'> / 池 "+pool+"</span> · 每片 "+t.x+" 线程</div></div>"+
+      "<div class='bar'><div style='width:"+t.pct+"%'></div></div>"+
+      "<div class='grid'>"+
+        "<div class='cell'><div class='k'>已下载</div><div class='v'>"+fmtGB(t.downloaded)+" <small>GB</small></div></div>"+
+        "<div class='cell'><div class='k'>总量</div><div class='v'>"+(t.total?fmtGB(t.total):"未知")+" <small>GB</small></div></div>"+
+        "<div class='cell'><div class='k'>当前速度</div><div class='v'>"+(t.rate>0?(t.rate/1e6).toFixed(1):"--")+" <small>MB/s</small></div></div>"+
+        "<div class='cell'><div class='k'>预计剩余</div><div class='v' id='eta"+i+"'>"+fmtEta(t.eta_sec)+"</div></div>"+
+      "</div>"+
+      vbar+vprog+
+      (t.last_msg?"<div class='hint' style='margin-top:6px'>"+esc(t.last_msg)+"</div>":"")+
+      (act?"<ul class='files'>"+act+"</ul>":"")+
+      "<div class='ops' style='margin-top:10px'>"+ops+"</div>"+
+    "</div>";
+  }).join("");
+  // 手动方案分片选择: 提交后端
+  div.querySelectorAll("select.jsel").forEach(sel=>{
+    sel.onchange=async()=>{
+      const dest=sel.dataset.dest;
+      const d=await post({action:"set_j", dest:dest, j:+sel.value});
+      if(d.ok) toast("✔ 分片数已调整，正在重启该任务生效（断点续传）");
+      else { toast("设置失败："+d.error, false); refresh(); }
+    };
+  });
+  drawRate(d.rate_hist||[], d.rate||0, d.disk_free);
+}
+
+function copyPath(i){
+  const t=(lastTasks[i]||{}).dest;
+  if(!t) return;
+  navigator.clipboard.writeText(t).then(()=>toast("✔ 本地路径已复制")).catch(()=>toast("复制失败", false));
+}
+async function taskOp(action, i){
+  const t=lastTasks[i]; if(!t) return;
+  const d=await post({action, dest:t.dest});
+  if(!d.ok) toast("操作失败："+d.error, false);
+  else toast(action==="stop"?"✔ 已暂停 "+t.repo:"✔ 已继续 "+t.repo);
+  refresh();
+}
+
+// ---- 速度曲线（全局总速率）----
+function drawRate(hist,cur,free){
+  const cv=$("rateCanvas"); if(!cv) return;
+  const dpr=window.devicePixelRatio||1, W=cv.clientWidth||700, H=52;
+  if(cv.width!==Math.round(W*dpr)){cv.width=W*dpr;cv.height=H*dpr;}
+  const x=cv.getContext("2d"); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,W,H);
+  const rates=hist.map(p=>p[1]/1e6);
+  const now=cur/1e6||(rates.length?rates[rates.length-1]:0);
+  const avg=rates.length?rates.reduce((a,b)=>a+b,0)/rates.length:0;
+  const peak=rates.length?Math.max(...rates):0, max=Math.max(0.5,peak)*1.15, pad=3;
+  $("rateStat").textContent="当前 "+(now?now.toFixed(1):"--")+" MB/s · 均 "+avg.toFixed(1)+" · 峰 "+peak.toFixed(1)+" MB/s"+(free?" · 盘余 "+fmtAuto(free):"");
+  x.strokeStyle="#1b2540"; x.beginPath(); x.moveTo(0,H-pad); x.lineTo(W,H-pad); x.stroke();
+  if(rates.length<2){ x.fillStyle="#8b96ad"; x.font="11px -apple-system,sans-serif"; x.fillText("采样中…",8,H/2); return; }
+  const n=rates.length, sx=W/(n-1);
+  const py=r=>H-pad-(r/max)*(H-2*pad);
+  x.beginPath(); rates.forEach((r,i)=>{ const px=i*sx; i?x.lineTo(px,py(r)):x.moveTo(px,py(r)); });
+  x.strokeStyle="#4f8cff"; x.lineWidth=1.6; x.stroke();
+  x.lineTo((n-1)*sx,H-pad); x.lineTo(0,H-pad); x.closePath();
+  const g=x.createLinearGradient(0,0,0,H); g.addColorStop(0,"rgba(79,140,255,.35)"); g.addColorStop(1,"rgba(79,140,255,0)");
+  x.fillStyle=g; x.fill();
+  x.beginPath(); x.arc((n-1)*sx,py(rates[n-1]),2.3,0,Math.PI*2); x.fillStyle="#5aa8ff"; x.fill();
+}
+
+// ---- 下载队列 ----
+let queued=[];
+function renderQueue(q){
+  const card=$("queueCard"); q=q||[]; queued=q;
+  if(!q.length){ card.style.display="none"; return; }
+  card.style.display="";
+  $("queue").innerHTML=q.map((t,i)=>
+    "<div class='q-row'><span class='q-no'>#"+(i+1)+"</span><div class='qn'><b>"+esc(t.repo)+"</b><div class='hint'>"+
+    fmtAuto(t.total||0)+" · 每片"+t.x+"线程 · "+epName(t.endpoint)+" · "+esc(t.added_at||"")+"</div></div>"+
+    "<button class='btn sm' onclick='removeQueue("+i+")'>移除</button></div>").join("");
+}
+async function removeQueue(i){
+  const t=queued[i];
+  if(t && !confirm("从下载队列移除 "+t.repo+"？")) return;
+  const d=await post({action:"queue_remove",index:i}); if(d.ok)renderQueue(d.queue); else toast("移除失败："+d.error, false);
+}
+$("clearQ").onclick=async()=>{
+  if(!queued.length) return;
+  if(!confirm("确定清空整个下载队列？共 "+queued.length+" 个任务将被移除，无法恢复。\n（不影响正在下载的任务）")) return;
+  const d=await post({action:"queue_clear"}); if(d.ok)renderQueue(d.queue);
+};
+
+// ---- 最近任务 ----
+let histList=[];
+function renderHist(hist){
+  histList=hist||[];
+  const card=$("histCard");
+  if(!histList.length){ card.style.display="none"; return; }
+  card.style.display="";
+  $("hist").innerHTML=histList.map((h,i)=>
+    "<div class='hist-row'><div class='hr'><b>"+esc(h.repo)+"</b><div class='ht'>"+esc(h.dest)+" · "+esc(h.at||"")+
+    "</div></div><div style='display:flex;gap:6px;align-items:center;flex-wrap:wrap'><button class='btn sm' onclick='resumeHist("+i+")'>重新下载</button><button class='btn sm' onclick='verifyHist("+i+")'>重新校验</button><button class='btn sm' onclick='openLocalDir("+i+")'>打开目录</button></div></div>").join("");
+}
+let modalTarget=null;
+function showDlModal(h){
+  modalTarget=h;
+  $("dlModalBody").textContent=h.repo+" 的本地文件已存在：\n"+h.dest+"\n\n· 仅校验：保留现有文件，只比对 sha256 完整性\n· 彻底重新下载：删除本地已有文件后从头下载";
+  $("dlModal").style.display="flex";
+}
+$("dlModalCancel").onclick=()=>{ $("dlModal").style.display="none"; modalTarget=null; };
+$("dlModalVerify").onclick=async()=>{
+  const h=modalTarget; $("dlModal").style.display="none"; modalTarget=null;
+  if(!h) return;
+  const d=await post({action:"resume_history",repo:h.repo,dest:h.dest,mode:"verify"});
+  if(d.ok) toast("✔ 校验已开始，完成后通知");
+  else toast("校验启动失败："+d.error, false);
+  refresh();
+};
+$("dlModalRe").onclick=async()=>{
+  const h=modalTarget; $("dlModal").style.display="none"; modalTarget=null;
+  if(!h) return;
+  if(!confirm("彻底重新下载将删除本地已有文件：\n"+h.dest+"\n\n已下载内容将全部清除后从头下载，确认继续？")) return;
+  const d=await post({action:"resume_history",repo:h.repo,dest:h.dest,mode:"redownload"});
+  if(d.ok) toast("✔ 已开始彻底重新下载 "+h.repo+(d.queued?"（并发已满，已排队）":""));
+  else toast("启动失败："+d.error, false);
+  refresh();
+};
+async function resumeHist(i){
+  const h=histList[i]; if(!h) return;
+  showDlModal(h);
+}
+async function verifyHist(i){
+  const h=histList[i]; if(!h) return;
+  const d=await post({action:"resume_history",repo:h.repo,dest:h.dest,mode:"verify"});
+  if(d.ok) toast("✔ 校验已开始，完成后通知");
+  else toast("校验启动失败："+d.error, false);
+  refresh();
+}
+async function openLocalDir(i){
+  const h=histList[i]; if(!h) return;
+  const d=await post({action:"open_dir",dest:h.dest});
+  if(d.ok) toast("✔ 已在访达中打开目录 "+h.repo);
+  else toast("打开失败："+d.error, false);
+}
+
+// ---- 日志 ----
+let lastLogs=[], modelLogs=[], clearSig=null;
+const ERR_RE=/(错误|失败|中断|corrupt|missing|!!|\berror\b|40[0-9]|50[0-9]|校验未通过|异常|traceback)/i;
+function currentLogs(){
+  return $("logSrc") && $("logSrc").value==="model" ? (modelLogs||[]) : (lastLogs||[]);
+}
+function renderLog(){
+  const sig=currentLogs().join("\n");
+  if(clearSig!==null && sig===clearSig){ $("log").textContent="（已清空显示，出现新日志后自动恢复）"; return; }
+  clearSig=null;
+  let lines=currentLogs();
+  if($("logErrOnly").checked) lines=lines.filter(s=>ERR_RE.test(s));
+  $("log").textContent=lines.join("\n")||($("logErrOnly").checked?"（没有问题级日志）":"（暂无日志）");
+  $("log").scrollTop=$("log").scrollHeight;
+}
+$("logErrOnly").onchange=renderLog;
+$("logSrc").onchange=()=>{ clearSig=null; renderLog(); };
+$("logClear").onclick=()=>{ clearSig=currentLogs().join("\n"); renderLog(); };
+
+refresh(); loadLib();
+let statTO;
+function statLoop(){ refresh(); statTO=setTimeout(statLoop, document.hidden?10000:2000); }
+statLoop();
+setInterval(loadLib,15000);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden){ clearTimeout(statTO); refresh(); statLoop(); } });
+</script>
+</body>
+</html>
