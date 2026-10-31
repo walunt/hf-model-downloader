@@ -441,6 +441,8 @@ def handle_control(data, local=False):
         stop_targets = []; launch_target = None; queued = False
         with _cfg_lock:
             dest = expand(data.get("dest", "").strip()) or os.path.join(expand(_cfg["default_root"]), repo)
+            dest, derr = _safe_dest(dest)          # 防止传入 ~/Documents 之类的任意目录
+            if not dest: return {"ok": False, "error": derr}
             tasks = _cfg.get("tasks", {}); q = _cfg.get("queue", [])
             # 重复检测(同仓库或同保存目录, 覆盖任务与队列)
             dupq = next((i for i, t in enumerate(q) if t.get("repo") == repo or t.get("dest") == dest), None)
@@ -482,7 +484,10 @@ def handle_control(data, local=False):
     if action == "resume_history":
         repo = parse_repo(data.get("repo", "")); dest = expand((data.get("dest") or "").strip())
         if not repo or not dest: return {"ok": False, "error": "历史任务信息不完整"}
+        # 保留原有文案(前端可能依赖), 再补越界校验: 此分支含 shutil.rmtree(dest), 缺了这步等于"任意目录可删"
         if not os.path.isdir(dest): return {"ok": False, "error": "本地目录已不存在: " + dest}
+        dest, derr = _safe_dest(dest)
+        if not dest: return {"ok": False, "error": derr}
         mode = data.get("mode") or "resume"
         # 仅校验: 独立进程, 不改 tasks, 不打断正在下载该目录的任务
         if mode == "verify":
@@ -534,16 +539,11 @@ def handle_control(data, local=False):
     if action == "open_dir":
         d = expand((data.get("dest") or "").strip())
         if not d or not os.path.isdir(d): return {"ok": False, "error": "目录不存在: " + (d or "(空)")}
-        # 安全: 只允许打开默认根目录下的模型目录, 或任务/历史里已记录的目录。
+        # 安全: 只允许打开模型根目录下的目录(统一校验, 含逐层软链检查)。
         # 有局域网访问时, 若不加限制, 任意存在的绝对路径都会被打开。
-        try: d_rp = os.path.realpath(d)
-        except OSError: d_rp = d
-        root_rp = os.path.realpath(expand(_cfg.get("default_root") or ""))
-        known = {os.path.realpath(expand(t.get("dest") or "")) for t in (_cfg.get("tasks") or {}).values()}
-        known |= {os.path.realpath(expand(h.get("dest") or "")) for h in (_cfg.get("history") or [])}
-        if d_rp != root_rp and not d_rp.startswith(root_rp + os.sep) and d_rp not in known:
-            return {"ok": False, "error": "只允许打开模型库目录或任务记录的目录"}
-        _run(["open", d])
+        d_rp, oerr = _safe_dest(d, must_exist=True)
+        if not d_rp: return {"ok": False, "error": oerr}
+        _run(["open", d_rp])   # 用校验后的 realpath, 避免 check 与 open 之间被替换(TOCTOU)
         return {"ok": True, "dest": d}
 
     # delete_model: 删除本地模型目录。mode=trash(移入废纸篓,可恢复) / purge(彻底删除)
@@ -708,6 +708,8 @@ def handle_control(data, local=False):
             if any(t.get("repo") == repo for t in tasks.values()) or any(t.get("repo") == repo for t in q):
                 return {"ok": False, "error": "该模型正在下载或已在队列中"}
             dest = expand((data.get("dest") or "").strip()) or os.path.join(expand(_cfg["default_root"]), repo)
+            dest, derr = _safe_dest(dest)          # 同上: 只允许模型根目录内的子目录
+            if not dest: return {"ok": False, "error": derr}
             if any(t.get("dest") == dest for t in tasks.values()) or any(t.get("dest") == dest for t in q):
                 return {"ok": False, "error": "该保存目录已被下载任务或队列占用: " + dest}
             ep = data.get("endpoint") if data.get("endpoint") in ENDPOINTS else "mirror"
@@ -1270,17 +1272,47 @@ def _batch_tasks(op, dests, mode="trash"):
     if op != "start": _fill_queue()
     return {"ok": True, "op": op, "done": done, "total": len(dests), "failed": failed}
 
+def _safe_dest(dest, must_exist=False):
+    """统一的目的目录校验: 只允许操作模型根目录(default_root)之内的子目录。
+
+    所有接受外部传入 dest 的入口(新建/入队/续传/重新下载/删除/打开目录)都要走这里。
+    此前这些入口要么不校验、要么只挡"上级目录", 导致可以操作 ~/Documents 之类的任意目录。
+
+    防护: 空值 · 系统根 / 主目录 · 模型根目录本身 · 越界 · **逐层**符号链接(只查叶子会被父级软链绕过)
+    返回 (realpath, None) 或 (None, 原因)
+    """
+    raw = expand(dest or "")
+    if not raw: return None, "目录为空"
+    root = os.path.realpath(expand(_cfg.get("default_root") or ""))
+    if not root or root == os.sep:
+        return None, "模型根目录未设置或不合法，请先在「默认设置」里设置"
+    d = os.path.realpath(raw)
+    home = os.path.realpath(os.path.expanduser("~"))
+    if d == os.sep: return None, "拒绝操作系统根目录"
+    if d == home: return None, "拒绝操作主目录"
+    if d == root: return None, "拒绝直接操作模型根目录本身"
+    if not d.startswith(root + os.sep):
+        return None, "只允许操作模型根目录下的子目录（" + root + "）"
+    # 逐层排除符号链接: 只查叶子会被父级软链绕过(如 /tmp/a -> ~/Documents)
+    cur = d
+    while cur.startswith(root + os.sep):
+        if os.path.islink(cur): return None, "路径中含符号链接，已拒绝: " + cur
+        parent = os.path.dirname(cur)
+        if parent == cur: break
+        cur = parent
+    if must_exist and not os.path.isdir(d):
+        return None, "目录不存在: " + d
+    return d, None
+
+
 def _safe_task_dest(dest):
     """任务删除时的目录校验: 任务保存目录可由用户自定义, 因此必须挡住系统性误删。
     拒绝: 根目录 / 主目录 / 模型根目录本身, 以及它们的上级目录, 还有符号链接。"""
-    if not dest: return None, "目录为空"
-    raw = expand(dest)
-    if os.path.islink(raw): return None, "目标是符号链接, 已拒绝删除"
-    d = os.path.realpath(raw)
-    home = os.path.realpath(os.path.expanduser("~"))
+    # 先走统一的根目录内校验(含逐层软链), 再补"上级目录"这层保护
+    d, err = _safe_dest(dest)
+    if not d: return None, err.replace("操作", "删除")
     root = os.path.realpath(expand(_cfg.get("default_root") or ""))
-    if not d or d == os.sep: return None, "拒绝删除根目录"
-    if d in {os.sep, home, root}: return None, "拒绝删除系统目录/主目录/模型根目录本身"
+    home = os.path.realpath(os.path.expanduser("~"))
     for f in (home, root):
         if f and f != d and f.startswith(d + os.sep):
             return None, "拒绝删除上级目录(会波及其他模型)"
