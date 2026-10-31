@@ -441,6 +441,26 @@ def handle_control(data):
         _run(["open", d])
         return {"ok": True, "dest": d}
 
+    # delete_model: 删除本地模型目录。mode=trash(移入废纸篓,可恢复) / purge(彻底删除)
+    # 只接受 org/name, 路径由后端在 default_root 下自行拼接校验; 下载中/排队中的拒绝删除
+    if action == "delete_model":
+        repo = (data.get("repo") or "").strip()
+        mode = data.get("mode") if data.get("mode") in ("trash", "purge") else "trash"
+        if repo in _deleting:
+            return {"ok": False, "error": "该模型正在删除中, 请稍候"}
+        with _cfg_lock:
+            running = any(t.get("repo") == repo and _pg_alive(t.get("pgid"))
+                          for t in _cfg.get("tasks", {}).values())
+            queued = any(qt.get("repo") == repo for qt in _cfg.get("queue", []))
+        if running: return {"ok": False, "error": "该模型正在下载中, 请先暂停后再删除"}
+        if queued: return {"ok": False, "error": "该模型在下载队列中, 请先在队列里移除"}
+        dest, err = _model_dir(repo)
+        if not dest: return {"ok": False, "error": err}
+        _deleting[repo] = {"dest": dest, "mode": mode, "started": time.strftime("%F %T")}
+        _del_err.pop(repo, None)
+        threading.Thread(target=_delete_worker, args=(dest, repo, mode), daemon=True).start()
+        return {"ok": True, "repo": repo, "mode": mode, "dest": dest}
+
     # set_config: 全局设置(限速/并发模型数/分片池/分配模式), 变化即时生效(重启相关任务)
     if action == "set_config":
         if data.get("token"):
@@ -841,16 +861,93 @@ def tail_lines(path, n=14, max_bytes=512 * 1024):
     except OSError:
         return []
 
+# ---------------- 模型库删除(移入废纸篓 / 彻底删除) ----------------
+# 安全策略: 前端只传 org/name, 路径一律由后端在 default_root 下自行拼接并校验,
+# 避免任意路径删除; 越界、软链、根目录本身、正在下载的一律拒绝。
+_deleting = {}   # repo -> {"dest", "mode", "started"}  正在删除
+_del_err = {}    # repo -> 最近一次删除失败原因
+
+def _model_dir(repo):
+    """把 org/name 解析为根目录下的真实子目录; 非法输入/越界/软链一律拒绝"""
+    if not isinstance(repo, str) or not re.match(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$", repo):
+        return None, "仓库名不合法(应为 org/name)"
+    org, name = repo.split("/")
+    root = os.path.realpath(expand(_cfg["default_root"]))
+    dest = os.path.join(root, org, name)
+    if os.path.islink(dest):
+        return None, "目标是符号链接, 已拒绝删除"
+    real = os.path.realpath(dest)
+    if real == root or not real.startswith(root + os.sep):
+        return None, "路径越界, 已拒绝删除"
+    if os.path.basename(real) != name or os.path.basename(os.path.dirname(real)) != org:
+        return None, "目录层级与仓库名不符, 已拒绝删除"
+    if not os.path.isdir(real):
+        return None, "目录不存在"
+    return real, None
+
+def _to_trash(dest):
+    """同卷移入废纸篓: os.rename 是 O(1), 百 GB 也是秒级且可恢复; 跨卷返回 None"""
+    trash = os.path.expanduser("~/.Trash")
+    try: os.makedirs(trash, exist_ok=True)
+    except OSError: return None
+    name = os.path.basename(dest); target = os.path.join(trash, name); i = 1
+    while os.path.exists(target):  # 重名时加序号, 绝不覆盖废纸篓里已有内容
+        target = os.path.join(trash, "%s %d" % (name, i)); i += 1
+    try:
+        os.rename(dest, target)
+        return target
+    except OSError:
+        return None  # 常见为跨卷(EXDEV), 交由调用方提示改用彻底删除
+
+def _delete_worker(dest, repo, mode):
+    """后台线程执行删除(大目录 rmtree 可能耗时, 不能阻塞 HTTP 请求)"""
+    msg = ""
+    try:
+        if mode == "trash":
+            tgt = _to_trash(dest)
+            if tgt is None:
+                msg = "无法移入废纸篓(可能跨卷), 请改用「彻底删除」"
+            else:
+                msg = ""  # 成功
+        else:
+            shutil.rmtree(dest)
+    except Exception as e:
+        msg = "删除失败: %s" % e
+    finally:
+        # 清掉指向该目录的任务条目与扫描缓存。注意同一目录可能有 /tmp 与 /private/tmp
+        # 两种写法(macOS 上 /tmp 是软链), 因此按 realpath 比较而不是仅比对字符串。
+        stale = []
+        with _cfg_lock:
+            tasks = _cfg.get("tasks", {})
+            for k in list(tasks):
+                try: same = os.path.realpath(k) == dest
+                except OSError: same = False
+                if k == dest or same: stale.append(k)
+            for k in stale: tasks.pop(k, None)
+            if stale: save_cfg()
+        for k in stale + [dest]:
+            _meta_cache.pop(k, None); _scan_cache.pop(k, None)
+        if msg: _del_err[repo] = msg
+        else: _del_err.pop(repo, None)
+        _deleting.pop(repo, None)
+        print("[删除] %s (%s) -> %s" % (repo, mode, msg or "完成"), flush=True)
+
 # ---------------- 本地模型库 ----------------
+def _models_resp(models, total, truncated):
+    """统一 /api/models 返回结构; 附带"正在删除"与"删除失败原因", 供前端标注与提示"""
+    return {"models": models, "total": total, "truncated": truncated, "limit": MAX_MODELS_LIST,
+            "deleting": {r: v.get("mode", "trash") for r, v in _deleting.items()},
+            "delete_errors": dict(_del_err)}
+
 def list_models():
     """列出本地模型库: 按最近活动时间倒序(有元数据用其 mtime, 否则用目录 mtime)。
     不再静默截断——超过 MAX_MODELS_LIST 时返回 truncated/total, 由前端明确提示"未全部显示"。"""
     root = expand(_cfg["default_root"]); out = []
     if not os.path.isdir(root):
-        return {"models": [], "total": 0, "truncated": False, "limit": MAX_MODELS_LIST}
+        return _models_resp([], 0, False)
     try: orgs = sorted(os.listdir(root))
     except OSError:
-        return {"models": [], "total": 0, "truncated": False, "limit": MAX_MODELS_LIST}
+        return _models_resp([], 0, False)
     for org in orgs:
         op = os.path.join(root, org)
         if not os.path.isdir(op) or org.startswith("."): continue
@@ -888,8 +985,7 @@ def list_models():
     total = len(out)
     shown = out[:MAX_MODELS_LIST]
     for m in shown: m.pop("_mtime", None)
-    return {"models": shown, "total": total,
-            "truncated": total > MAX_MODELS_LIST, "limit": MAX_MODELS_LIST}
+    return _models_resp(shown, total, total > MAX_MODELS_LIST)
 
 def status_json():
     tasks = _cfg.get("tasks", {})

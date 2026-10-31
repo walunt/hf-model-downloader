@@ -23,6 +23,8 @@
   .btn.primary { background:linear-gradient(90deg,#2f6bff,#4f8cff); border-color:transparent; color:#fff; font-weight:600; }
   .btn:disabled { opacity:.45; cursor:not-allowed; }
   .btn.sm { padding:6px 11px; font-size:12px; }
+  .btn.del { border-color:#5c2230; color:var(--red); }
+  .btn.del:hover { border-color:var(--red); background:#240f14; }
   .badge { font-size:11px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--dim); }
   .badge.run { color:var(--ok); border-color:#1f5c38; background:#0f2419; }
   .badge.stop { color:var(--warn); border-color:#5c471f; background:#241d0f; }
@@ -107,8 +109,19 @@
     </div>
   </div>
 </div>
+<div id="delModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:480px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.5)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">删除本地模型</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:14px;white-space:pre-wrap;word-break:break-all" id="delModalBody">--</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" id="delModalCancel">取消</button>
+      <button class="btn primary" id="delModalTrash">移到废纸篓（可恢复）</button>
+      <button class="btn del" id="delModalPurge">彻底删除</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.27 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.28 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -397,14 +410,21 @@ let libModels=[];
 async function loadLib(){
   try{ const r=await fetch("/api/models"); const d=await r.json();
     const models=d.models||[];
+    const del=d.deleting||{}, derr=d.delete_errors||{};
+    libDeleting=del;
     $("libCount").textContent=(d.total||models.length)+" 个";
     if(!models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
     libModels=models;
     // 后端已按最近活动时间倒序返回; 超上限时明确提示, 不再静默截断
     const trunc = d.truncated
       ? '<div class="hint" style="margin-bottom:6px;color:var(--warn)">共 '+d.total+' 个模型，仅显示最近有活动的 '+models.length+' 个（上限 '+d.limit+'）</div>' : "";
-    $("lib").innerHTML=trunc+models.map((m,i)=>{
-      const st = m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:#1f5c38">✔ 完整</span>'
+    const errKeys=Object.keys(derr);
+    const errBox = errKeys.length
+      ? '<div class="hint" style="margin-bottom:6px;color:var(--red)">删除未完成：'+errKeys.map(k=>esc(k)+' — '+esc(derr[k])).join('；')+'</div>' : "";
+    $("lib").innerHTML=trunc+errBox+models.map((m,i)=>{
+      const busy = !!del[m.repo];   // 正在删除(彻底删除耗时较长, 期间目录仍存在)
+      const st = busy ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 删除中</span>'
+               : m.state==="ok" ? '<span class="tag" style="color:var(--ok);border-color:#1f5c38">✔ 完整</span>'
                : m.state==="bad" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">⚠ 校验未过</span>'
                : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 下载失败</span>'
                : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:#5c2230">✕ 文件缺失</span>'
@@ -413,10 +433,36 @@ async function loadLib(){
       const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
       return "<div class='lib-item'><span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
         fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%":"")+(m.date?" · "+esc(m.date):"")+vd+
-        "</span><button class='btn sm lib-btn' onclick='openModelCard("+i+")'>模型卡片</button></div>";
+        "</span><span class='lib-btn'>"+
+        "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
+        "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
     }).join("");
   }catch(e){ $("lib").textContent="读取失败: "+e.message; }
 }
+// ---- 模型库删除（移到废纸篓 / 彻底删除）----
+let libDeleting={}, delTarget=null;
+function openDelModal(i){
+  const m=libModels[i]; if(!m) return;
+  delTarget=m;
+  const reserve = m.state==="ok" ? "" : "\n\n注意：该模型当前状态为「"+(m.state==="missing"?"文件缺失":m.state==="failed"?"下载失败":m.state==="bad"?"校验未过":"未完成")+"」，删除后需要重新下载。";
+  $("delModalBody").textContent =
+    m.repo+"\n本地占用 "+fmtAuto(m.bytes)+(m.total?" / 共 "+fmtAuto(m.total):"")+reserve+
+    "\n\n· 移到废纸篓：秒级完成、可在废纸篓里恢复；空间在清空废纸篓后释放"+
+    "\n· 彻底删除：直接抹除、无法恢复，空间立即释放";
+  $("delModal").style.display="flex";
+}
+$("delModalCancel").onclick=()=>{ $("delModal").style.display="none"; delTarget=null; };
+async function doDelete(mode){
+  const m=delTarget; $("delModal").style.display="none"; delTarget=null;
+  if(!m) return;
+  if(mode==="purge" && !confirm("彻底删除不可恢复：\n"+m.repo+"\n占用 "+fmtAuto(m.bytes)+"\n\n确认抹除？")) return;
+  const d=await post({action:"delete_model", repo:m.repo, mode:mode});
+  if(!d.ok){ toast("删除失败："+d.error, false); return; }
+  toast(mode==="trash" ? "✔ 已移入废纸篓："+m.repo : "◌ 已开始彻底删除："+m.repo, true);
+  setTimeout(loadLib, 700); refresh();
+}
+$("delModalTrash").onclick=()=>doDelete("trash");
+$("delModalPurge").onclick=()=>doDelete("purge");
 function openModelCard(i){
   const m=libModels[i]; if(!m) return;
   window.open("https://hf-mirror.com/"+m.repo, "_blank");
