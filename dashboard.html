@@ -331,7 +331,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.41 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.42 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -707,7 +707,10 @@ function libRow(m, i, del){
            : m.state==="failed" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 下载失败</span>'
            : m.state==="missing" ? '<span class="tag" style="color:var(--red);border-color:var(--bd-bad)">✕ 文件缺失</span>'
            : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">◌ 校验中</span>'
-           : '<span class="tag">下载中/未校验</span>';
+           // 无校验记录时的兜底: 已下完 100% 不能说"下载中"; 本地自建目录也不应暗示在下载
+           : (m.total && m.pct >= 99.99) ? '<span class="tag" style="color:var(--warn);border-color:var(--bd-warn)">● 待校验</span>'
+           : m.local_only ? '<span class="tag">● 本地目录</span>'
+           : '<span class="tag">◌ 下载中</span>';
   const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
   const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
   return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
@@ -745,9 +748,15 @@ async function loadLib(){
     libDeleting=del;
     $("libCount").textContent=(d.total||models.length)+" 个";
     if(!models.length){ $("lib").innerHTML='<span class="hint">默认根目录下还没有模型</span>'; return; }
-    libModels=models; libTrunc=trunc; libErrBox=errBox;
+    libModels=models;
+    // 后端已按最近活动时间倒序返回; 超上限时明确提示, 不再静默截断
+    libTrunc = d.truncated
+      ? '<div class="hint" style="margin-bottom:6px;color:var(--warn)">共 '+d.total+' 个模型，仅显示最近有活动的 '+models.length+' 个（上限 '+d.limit+'）</div>' : "";
+    const errKeys=Object.keys(derr);
+    libErrBox = errKeys.length
+      ? '<div class="hint" style="margin-bottom:6px;color:var(--red)">删除未完成：'+errKeys.map(k=>esc(k)+' — '+esc(derr[k])).join('；')+'</div>' : "";
     renderLibRows();
-    // 「补全元数据」    // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
+    // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
     const bf = d.backfill || {};
     const unk = models.filter(m=>!m.total && !m.local_only).length;   // 本地自建目录查不到上游, 不算"待补全"
     const bb = $("btnBackfill");
