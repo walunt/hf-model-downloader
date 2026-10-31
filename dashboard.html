@@ -96,6 +96,15 @@
   .task { border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; background:#141b2b; }
   .task:last-child { margin-bottom:0; }
   .task .ops { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  /* 批量操作 */
+  .batchbar { display:none; gap:8px; align-items:center; flex-wrap:wrap;
+              margin:8px 0 2px; padding:8px 10px; background:#141b2b;
+              border:1px solid var(--line); border-radius:8px; }
+  .batchbar .hint { margin-right:auto; }
+  .chkwrap { display:flex; align-items:center; gap:6px; }
+  input.tchk, input.lchk { width:16px; height:16px; accent-color:#2f6bff; cursor:pointer; flex-shrink:0; }
+  #taskTable td.cchk, #taskTable th.cchk { padding-left:2px; padding-right:0; }
+  #taskTable td.cchk { text-align:center; }
   /* 视图切换 */
   .viewswitch { margin-left:auto; display:flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
   .viewswitch button { background:#10162a; color:var(--dim); border:none; padding:4px 12px; font-size:12px; cursor:pointer; font-family:inherit; }
@@ -226,8 +235,20 @@
     </div>
   </div>
 </div>
+<div id="btRmModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:520px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.5)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">批量删除下载任务</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:14px;white-space:pre-wrap" id="btRmBody">--</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" id="btRmCancel">取消</button>
+      <button class="btn" id="btRmKeep">仅移除任务</button>
+      <button class="btn primary" id="btRmTrash">移到废纸篓</button>
+      <button class="btn del" id="btRmPurge">彻底删除</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.34 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.35 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -276,7 +297,16 @@
   <div class="card" id="tasksCard">
     <h2>下载任务 <span id="taskCount" class="badge">0 个</span>
       <span class="viewswitch"><button id="btnViewCard">卡片</button><button id="btnViewList">列表</button></span>
+      <button class="btn sm" id="btnBatchTask">批量</button>
     </h2>
+    <div class="batchbar" id="taskBatchBar">
+      <span class="hint" id="taskBatchInfo">已选 0 项</span>
+      <button class="btn sm" id="btnBatchAll">全选</button>
+      <button class="btn sm" id="btnBatchPause">全部暂停</button>
+      <button class="btn sm" id="btnBatchResume">全部继续</button>
+      <button class="btn sm del" id="btnBatchRemove">批量删除</button>
+      <button class="btn sm" id="btnBatchCancel">取消</button>
+    </div>
     <div class="ratechart">
       <div class="k"><span>最近 30 分钟总下载速度</span><span id="rateStat">--</span></div>
       <canvas id="rateCanvas"></canvas>
@@ -371,7 +401,16 @@
 
   <!-- 本地模型库 -->
   <div class="card">
-    <h2>本地模型库 <span class="badge" id="libCount">--</span> <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
+    <h2>本地模型库 <span class="badge" id="libCount">--</span>
+      <button class="btn sm" id="btnBatchLib">批量</button>
+      <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
+    <div class="batchbar" id="libBatchBar">
+      <span class="hint" id="libBatchInfo">已选 0 项</span>
+      <button class="btn sm" id="btnLibAll">全选</button>
+      <button class="btn sm" id="btnLibTrash">移到废纸篓</button>
+      <button class="btn sm del" id="btnLibPurge">彻底删除</button>
+      <button class="btn sm" id="btnLibCancel">取消</button>
+    </div>
     <div id="lib"><span class="hint">读取中…</span></div>
   </div>
 
@@ -552,14 +591,132 @@ async function loadLib(){
                : m.state==="verifying" ? '<span class="tag" style="color:var(--warn);border-color:#5c471f">◌ 校验中</span>'
                : '<span class="tag">下载中/未校验</span>';
       const vd = m.verify ? (" · 校验 "+m.verify.ok+"/"+m.verify.total+(m.verify.bad?" 损坏"+m.verify.bad:"")+(m.verify.miss?" 缺失"+m.verify.miss:"")) : "";
-      return "<div class='lib-item'><span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
+      const lchk = batchLib ? "<input type='checkbox' class='lchk' data-repo=\""+escA(m.repo)+"\" "+(selLib.has(m.repo)?"checked":"")+">" : "";
+      return "<div class='lib-item'>"+lchk+"<span class='lib-state'>"+st+"</span><span class='lib-name'>"+esc(m.repo)+"</span><span class='lib-meta'>"+
         fmtAuto(m.bytes)+(m.total?" / "+fmtAuto(m.total)+" · "+m.pct.toFixed(0)+"%":"")+(m.date?" · "+esc(m.date):"")+vd+
         "</span><span class='lib-btn'>"+
         "<button class='btn sm' onclick='openModelCard("+i+")'>模型卡片</button> "+
         "<button class='btn sm del' onclick='openDelModal("+i+")'"+(busy?" disabled":"")+">删除</button></span></div>";
     }).join("");
+    // 批量勾选: 清理已不存在的模型, 绑定复选框
+    const repoSet = new Set(models.map(m=>m.repo));
+    [...selLib].forEach(x=>{ if(!repoSet.has(x)) selLib.delete(x); });
+    $("lib").querySelectorAll("input.lchk").forEach(cb=>{
+      cb.onchange=()=>{ cb.checked ? selLib.add(cb.dataset.repo) : selLib.delete(cb.dataset.repo); updateBatchBars(); };
+    });
+    updateBatchBars();
   }catch(e){ $("lib").textContent="读取失败: "+e.message; }
 }
+// ---- 批量操作：下载任务 ----
+function batchTaskOpLabel(op){
+  return op==="stop" ? "已暂停" : (op==="start" ? "已继续" : "已移除");
+}
+async function batchTaskOp(op){
+  const dests = [...selTasks];
+  if(!dests.length) return;
+  const d = await post({action:"batch_task", op:op, dests:dests});
+  if(!d.ok){ toast("批量操作失败："+d.error, false); return; }
+  let msg = "✔ " + batchTaskOpLabel(op) + " " + d.done + " 个";
+  if(d.failed && d.failed.length) msg += "，跳过 " + d.failed.length + " 个";
+  toast(msg, !(d.failed && d.failed.length));
+  if(d.failed && d.failed.length) console.warn("批量失败明细", d.failed);
+  if(op === "remove"){ selTasks.clear(); setTimeout(loadLib, 900); }
+  refresh();
+}
+function openBatchRemove(){
+  const picked = (lastTasks||[]).filter(t=>selTasks.has(t.dest));
+  if(!picked.length) return;
+  const total = picked.reduce((s,t)=>s+(t.downloaded||0),0);
+  $("btRmBody").textContent =
+    "共 " + picked.length + " 个任务，已下载合计 " + fmtAuto(total) + "\n\n" +
+    "· 仅移除任务：卡片消失，已下载文件保留，之后可从「最近任务」续传\n" +
+    "· 移到废纸篓：连各自的模型目录一起移入废纸篓，秒级完成且可恢复\n" +
+    "· 彻底删除：连各自的模型目录一起抹除，不可恢复，空间立即释放";
+  $("btRmModal").style.display = "flex";
+}
+async function doBatchRemove(mode){
+  $("btRmModal").style.display = "none";
+  const dests = [...selTasks];
+  if(!dests.length) return;
+  if(mode === "purge" && !confirm("彻底删除 " + dests.length + " 个任务及其本地文件，不可恢复。\n\n确认？")) return;
+  await batchTaskOp2(dests, mode);
+}
+async function batchTaskOp2(dests, mode){
+  const d = await post({action:"batch_task", op:"remove", dests:dests, mode:mode});
+  if(!d.ok){ toast("批量删除失败："+d.error, false); return; }
+  let msg = "✔ 已移除 " + d.done + " 个任务";
+  if(d.failed && d.failed.length) msg += "，跳过 " + d.failed.length + " 个";
+  toast(msg, !(d.failed && d.failed.length));
+  if(d.failed && d.failed.length) console.warn("批量删除失败明细", d.failed);
+  selTasks.clear(); refresh(); setTimeout(loadLib, 900);
+}
+$("btnBatchTask").onclick = () => {
+  batchTask = !batchTask; selTasks.clear();
+  $("btnBatchTask").className = batchTask ? "btn sm primary" : "btn sm";
+  $("btnBatchTask").textContent = batchTask ? "批量中" : "批量";
+  if(lastStatus) renderTasks(lastStatus);
+  updateBatchBars();
+};
+$("btnBatchCancel").onclick = () => {
+  batchTask = false; selTasks.clear();
+  $("btnBatchTask").className = "btn sm"; $("btnBatchTask").textContent = "批量";
+  if(lastStatus) renderTasks(lastStatus);
+  updateBatchBars();
+};
+$("btnBatchAll").onclick = () => {
+  const all = lastTasks || [];
+  const on = selTasks.size < all.length;
+  selTasks.clear();
+  if(on) all.forEach(t=>selTasks.add(t.dest));
+  if(lastStatus) renderTasks(lastStatus);
+  updateBatchBars();
+};
+$("btnBatchPause").onclick = () => batchTaskOp("stop");
+$("btnBatchResume").onclick = () => batchTaskOp("start");
+$("btnBatchRemove").onclick = () => openBatchRemove();
+$("btRmCancel").onclick = () => { $("btRmModal").style.display = "none"; };
+$("btRmKeep").onclick = () => doBatchRemove("keep");
+$("btRmTrash").onclick = () => doBatchRemove("trash");
+$("btRmPurge").onclick = () => doBatchRemove("purge");
+
+// ---- 批量操作：本地模型库 ----
+async function batchDelModels(mode){
+  const repos = [...selLib];
+  if(!repos.length) return;
+  const label = mode === "trash" ? "移到废纸篓" : "彻底删除";
+  const tip = mode === "trash"
+    ? "秒级完成，可在废纸篓恢复；空间在清空废纸篓后释放。"
+    : "不可恢复，空间立即释放。";
+  if(!confirm("批量" + label + "：" + repos.length + " 个模型目录\n\n" + tip + "\n\n确认？")) return;
+  const d = await post({action:"batch_delete_model", repos:repos, mode:mode});
+  if(!d.ok){ toast("批量删除失败："+d.error, false); return; }
+  let msg = "✔ 已开始" + label + " " + d.started.length + " 个";
+  if(d.failed && d.failed.length) msg += "，跳过 " + d.failed.length + " 个";
+  toast(msg, d.failed.length === 0);
+  if(d.failed && d.failed.length) console.warn("批量删除跳过明细", d.failed);
+  selLib.clear(); setTimeout(loadLib, 900); refresh();
+}
+$("btnBatchLib").onclick = () => {
+  batchLib = !batchLib; selLib.clear();
+  $("btnBatchLib").className = batchLib ? "btn sm primary" : "btn sm";
+  $("btnBatchLib").textContent = batchLib ? "批量中" : "批量";
+  loadLib();
+};
+$("btnLibCancel").onclick = () => {
+  batchLib = false; selLib.clear();
+  $("btnBatchLib").className = "btn sm"; $("btnBatchLib").textContent = "批量";
+  loadLib();
+};
+$("btnLibAll").onclick = () => {
+  const all = libModels || [];
+  const on = selLib.size < all.length;
+  selLib.clear();
+  if(on) all.forEach(m=>selLib.add(m.repo));
+  loadLib();
+};
+$("btnLibTrash").onclick = () => batchDelModels("trash");
+$("btnLibPurge").onclick = () => batchDelModels("purge");
+
 // ---- 模型库删除（移到废纸篓 / 彻底删除）----
 let libDeleting={}, delTarget=null;
 function openDelModal(i){
@@ -638,6 +795,23 @@ function taskBadge(t, dlRunning){
 // ---- 任务列表: 卡片 / 列表 两种视图(共用同一份数据与操作, 选择记忆在 localStorage) ----
 let viewMode = (localStorage.getItem("hfTaskView")==="list") ? "list" : "card";
 let lastStatus = null;
+// 批量选择: 任务按 dest, 模型按 repo 记 key
+let batchTask = false, selTasks = new Set();
+let batchLib = false, selLib = new Set();
+
+function updateBatchBars(){
+  const tb = $("taskBatchBar"), lb = $("libBatchBar");
+  if(tb) tb.style.display = batchTask ? "flex" : "none";
+  if($("taskBatchInfo")) $("taskBatchInfo").textContent = "已选 " + selTasks.size + " 项";
+  ["btnBatchPause","btnBatchResume","btnBatchRemove"].forEach(id=>{ if($(id)) $(id).disabled = selTasks.size===0; });
+  if($("btnBatchAll") && lastTasks) $("btnBatchAll").textContent =
+    (lastTasks.length && selTasks.size>=lastTasks.length) ? "取消全选" : "全选";
+  if(lb) lb.style.display = batchLib ? "flex" : "none";
+  if($("libBatchInfo")) $("libBatchInfo").textContent = "已选 " + selLib.size + " 项";
+  ["btnLibTrash","btnLibPurge"].forEach(id=>{ if($(id)) $(id).disabled = selLib.size===0; });
+  if($("btnLibAll") && libModels) $("btnLibAll").textContent =
+    (libModels.length && selLib.size>=libModels.length) ? "取消全选" : "全选";
+}
 
 function jCell(manual, pool, t){
   if(!manual) return "<span style='font-weight:600'>"+t.j+"</span>";
@@ -671,8 +845,9 @@ function taskCardHtml(d,t,i){
   const act = (t.active||[]).map(f=>"<li><div class='frow'><span class='n'>"+esc(f.name)+"</span><span class='s'>"+
     fmtGB(f.bytes)+" / "+fmtGB(f.size)+" GB · "+f.pct.toFixed(0)+"%</span></div>"+
     "<div class='mini'><div style='width:"+f.pct.toFixed(2)+"%'></div></div></li>").join("");
+  const tchk = batchTask ? "<span class='chkwrap'><input type='checkbox' class='tchk' data-dest=\""+escA(t.dest)+"\" "+(selTasks.has(t.dest)?"checked":"")+"></span>" : "";
   return "<div class='task'>"+
-    "<div class='top'><div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
+    "<div class='top'>"+tchk+"<div class='repo'>"+esc(t.repo)+"<span class='badge "+bd.cls+"' style='margin-left:8px'>"+bd.txt+"</span></div>"+
     "<div class='stat'>"+t.files_done+" / "+(t.files_expected||"?")+" 文件 · "+epName(t.endpoint)+"</div></div>"+
     "<div class='hint' style='cursor:pointer;word-break:break-all' title='点击复制本地路径' onclick='copyPath(\""+i+"\")'>"+esc(t.dest||"")+"</div>"+
     "<div class='top' style='margin-top:8px'><div class='pct'>"+t.pct.toFixed(2)+"<small>%</small></div>"+
@@ -701,6 +876,7 @@ function taskListHtml(d, tasks){
     // 列宽有限: 失败/校验中用短文案, 完整原因放 title
     const btxt = t.phase==="failed" ? "✕ 失败" : (t.phase==="verifying" ? "◌ 校验中" : bd.txt);
     return "<tr>"+
+      "<td class='cchk'>"+(batchTask ? "<input type='checkbox' class='tchk' data-dest=\""+escA(t.dest)+"\" "+(selTasks.has(t.dest)?"checked":"")+">" : "")+"</td>"+
       "<td class='c-state'><span class='badge "+bd.cls+"' title='"+escA(bd.txt)+"'>"+btxt+"</span>"+
         (bad?"<span class='vflag' title='sha256 校验未通过'>⚠</span>":"")+"</td>"+
       "<td class='c-model'><div class='rname' title='"+escA(t.dest||"")+"（点击复制路径）' onclick='copyPath("+i+")'>"+esc(t.repo)+"</div>"+
@@ -716,10 +892,10 @@ function taskListHtml(d, tasks){
   }).join("");
   // 固定列宽(table-layout:fixed): 状态与操作列不再被长内容挤压, 模型列吃掉剩余宽度
   return "<div class='tblwrap'><table id='taskTable'>"+
-    "<colgroup><col style='width:78px'><col><col style='width:118px'>"+
+    "<colgroup><col style='width:30px'><col style='width:78px'><col><col style='width:118px'>"+
     "<col style='width:120px'><col style='width:88px'><col style='width:56px'>"+
     "<col style='width:66px'><col style='width:146px'></colgroup>"+
-    "<thead><tr><th>状态</th><th>模型</th><th>进度</th>"+
+    "<thead><tr><th class='cchk'>"+(batchTask ? "<input type='checkbox' id='selAllTasks' title='全选'>" : "")+"</th><th>状态</th><th>模型</th><th>进度</th>"+
     "<th class='num'>已下载 / 总量 GB</th><th class='num'>速度 MB/s</th><th class='num'>剩余</th>"+
     "<th class='num'>分片/池</th><th></th></tr></thead><tbody>"+rows+"</tbody></table></div>";
 }
@@ -743,6 +919,22 @@ function renderTasks(d){
       else { toast("设置失败："+res.error, false); refresh(); }
     };
   });
+  // 批量勾选: 清理已消失的任务, 绑定新渲染出来的复选框
+  const destSet = new Set(tasks.map(t=>t.dest));
+  [...selTasks].forEach(x=>{ if(!destSet.has(x)) selTasks.delete(x); });
+  div.querySelectorAll("input.tchk").forEach(cb=>{
+    cb.onchange=()=>{ cb.checked ? selTasks.add(cb.dataset.dest) : selTasks.delete(cb.dataset.dest); updateBatchBars(); };
+  });
+  const allCb = $("selAllTasks");
+  if(allCb){
+    allCb.checked = tasks.length > 0 && selTasks.size >= tasks.length;
+    allCb.onchange = () => {
+      selTasks.clear();
+      if(allCb.checked) tasks.forEach(t=>selTasks.add(t.dest));
+      renderTasks(d); updateBatchBars();
+    };
+  }
+  updateBatchBars();
   drawRate(d.rate_hist||[], d.rate||0, d.disk_free);
 }
 

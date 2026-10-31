@@ -477,12 +477,46 @@ def handle_control(data):
             queued = any(qt.get("repo") == repo for qt in _cfg.get("queue", []))
         if running: return {"ok": False, "error": "该模型正在下载中, 请先暂停后再删除"}
         if queued: return {"ok": False, "error": "该模型在下载队列中, 请先在队列里移除"}
-        dest, err = _model_dir(repo)
-        if not dest: return {"ok": False, "error": err}
-        _deleting[repo] = {"dest": dest, "mode": mode, "started": time.strftime("%F %T")}
-        _del_err.pop(repo, None)
-        threading.Thread(target=_delete_worker, args=(dest, repo, mode), daemon=True).start()
-        return {"ok": True, "repo": repo, "mode": mode, "dest": dest}
+        okd, info = _start_delete_model(repo, mode)
+        if not okd: return {"ok": False, "error": info}
+        return {"ok": True, "repo": repo, "mode": mode, "dest": info}
+
+    # batch_delete_model: 批量删除模型目录(repos 列表), 逐个校验并异步执行
+    if action == "batch_delete_model":
+        mode = data.get("mode") if data.get("mode") in ("trash", "purge") else "trash"
+        repos = [r.strip() for r in (data.get("repos") or []) if isinstance(r, str) and r.strip()]
+        if not repos: return {"ok": False, "error": "未选择任何模型"}
+        started, failed = [], []
+        for repo in repos:
+            with _cfg_lock:
+                running = any(t.get("repo") == repo and _pg_alive(t.get("pgid"))
+                              for t in _cfg.get("tasks", {}).values())
+                queued = any(qt.get("repo") == repo for qt in _cfg.get("queue", []))
+            if running: failed.append({"repo": repo, "error": "正在下载中"}); continue
+            if queued: failed.append({"repo": repo, "error": "在下载队列中"}); continue
+            okd, info = _start_delete_model(repo, mode)
+            (started.append(repo) if okd else failed.append({"repo": repo, "error": info}))
+        return {"ok": True, "started": started, "failed": failed,
+                "total": len(repos), "mode": mode}
+
+    # remove_task: 单个任务移除(可连带处理本地目录)
+    if action == "remove_task":
+        dest = expand((data.get("dest") or "").strip())
+        if not dest: return {"ok": False, "error": "缺少任务目录"}
+        mode = data.get("mode") if data.get("mode") in ("keep", "trash", "purge") else "trash"
+        okr, detail = _remove_one_task(dest, mode)
+        if not okr: return {"ok": False, "error": detail}
+        _fill_queue()
+        return {"ok": True, "removed": True, "dest": dest, "mode": mode, "detail": detail}
+
+    # batch_task: 批量 暂停/继续/删除 任务; op=stop|start|remove
+    if action == "batch_task":
+        op = str(data.get("op", ""))
+        dests = [expand(d.strip()) for d in (data.get("dests") or []) if isinstance(d, str) and d.strip()]
+        mode = data.get("mode") if data.get("mode") in ("keep", "trash", "purge") else "trash"
+        if op not in ("stop", "start", "remove") or not dests:
+            return {"ok": False, "error": "参数不完整"}
+        return _batch_tasks(op, dests, mode)
 
     # set_config: 全局设置(限速/并发模型数/分片池/分配模式), 变化即时生效(重启相关任务)
     if action == "set_config":
@@ -601,13 +635,6 @@ def handle_control(data):
                 task["j"] = nj
                 task["last_msg"] = time.strftime("%T") + " 分片调整为 %d" % nj
                 save_cfg(); act = "set_j"
-            elif action == "remove_task":
-                # 移除任务条目, 并按 mode 处理已下载的本地目录:
-                #   keep=只移除任务(保留文件) / trash=移入废纸篓(默认, 可恢复) / purge=彻底删除
-                rm_mode = data.get("mode") if data.get("mode") in ("keep", "trash", "purge") else "trash"
-                task["want_run"] = False
-                tasks.pop(dest, None)
-                save_cfg(); act = "remove"
             else:
                 return {"ok": False, "error": "unknown action"}
     # ---- 进程操作放锁外 ----
@@ -621,36 +648,6 @@ def handle_control(data):
         launch(task)
     elif act == "set_j":
         _restart_tasks([task])
-    elif act == "remove":
-        dkey = task.get("dest", "")
-        stop_task(task)                       # 必须先停进程组: 边写边删会产生残缺文件与竞态
-        _task_state.pop(dkey, None)           # 清自动重启节流状态
-        with _slock:
-            _task_sample.pop(dkey, None); _task_rates.pop(dkey, None)
-        detail = "任务已移除"
-        target = None
-        if rm_mode != "keep" and dkey:
-            target, err = _safe_task_dest(dkey)
-            if err:
-                detail += "；本地目录未删除：" + err
-            elif not os.path.exists(target):
-                detail += "；本地无目录，无需删除"
-            elif rm_mode == "trash":
-                tgt = _to_trash(target)
-                detail += "，模型目录已移入废纸篓（可恢复）" if tgt else \
-                          "；但目录无法移入废纸篓（可能跨卷），请改用彻底删除"
-            else:
-                try:
-                    shutil.rmtree(target)
-                    detail += "，模型目录已彻底删除"
-                except Exception as e:
-                    detail += "；但目录删除失败：%s" % e
-        for k in (dkey, target):              # 同时清原始键与 realpath 后的键
-            if k:
-                _meta_cache.pop(k, None); _scan_cache.pop(k, None)
-        _fill_queue()                         # 释放的并发名额让队列补位
-        print("[删除任务] %s | mode=%s | %s" % (dkey, rm_mode, detail), flush=True)
-        return {"ok": True, "removed": True, "dest": dkey, "mode": rm_mode, "detail": detail}
     return {"ok": True, "task": task, "dl_running": dl_running()}
 
 def public_cfg():
@@ -994,6 +991,85 @@ def _delete_worker(dest, repo, mode):
         else: _del_err.pop(repo, None)
         _deleting.pop(repo, None)
         print("[删除] %s (%s) -> %s" % (repo, mode, msg or "完成"), flush=True)
+
+def _start_delete_model(repo, mode):
+    """校验并把这一个模型目录的删除丢到后台线程; 返回 (ok, dest 或 错误说明)"""
+    if repo in _deleting: return False, "该模型正在删除中"
+    dest, err = _model_dir(repo)
+    if not dest: return False, err
+    _deleting[repo] = {"dest": dest, "mode": mode, "started": time.strftime("%F %T")}
+    _del_err.pop(repo, None)
+    threading.Thread(target=_delete_worker, args=(dest, repo, mode), daemon=True).start()
+    return True, dest
+
+def _remove_one_task(dest, mode="trash"):
+    """移除单个任务, 并按 mode 处理本地目录: keep=保留 / trash=废纸篓 / purge=彻底删除。
+    顺序铁律: 先删条目落盘 -> 停进程组 -> 再动目录(否则 aria2 边写边删会产生残缺文件)。"""
+    with _cfg_lock:
+        task = _cfg.get("tasks", {}).pop(dest, None)
+        if task is None: return False, "任务不存在"
+        task["want_run"] = False
+        save_cfg()
+    stop_task(task)
+    _task_state.pop(dest, None)
+    with _slock:
+        _task_sample.pop(dest, None); _task_rates.pop(dest, None)
+    detail = "任务已移除"
+    target = None
+    if mode != "keep":
+        target, err = _safe_task_dest(dest)
+        if err:
+            detail += "；本地目录未删除：" + err
+        elif not os.path.exists(target):
+            detail += "；本地无目录，无需删除"
+        elif mode == "trash":
+            tgt = _to_trash(target)
+            detail += "，模型目录已移入废纸篓（可恢复）" if tgt else \
+                      "；目录无法移入废纸篓（可能跨卷），请改用彻底删除"
+        else:
+            try:
+                shutil.rmtree(target); detail += "，模型目录已彻底删除"
+            except Exception as e:
+                detail += "；目录删除失败：%s" % e
+    for k in (dest, target):          # 同时清原始键与 realpath 后的键
+        if k:
+            _meta_cache.pop(k, None); _scan_cache.pop(k, None)
+    print("[删除任务] %s | mode=%s | %s" % (dest, mode, detail), flush=True)
+    return True, detail
+
+def _batch_tasks(op, dests, mode="trash"):
+    """批量 暂停/继续/删除。逐个执行, 单个失败不影响其余, 失败原因逐条回报。"""
+    done, failed, actions = 0, [], []
+    for dest in dests:
+        try:
+            if op == "remove":
+                okr, detail = _remove_one_task(dest, mode)
+                if okr: done += 1
+                else: failed.append({"dest": dest, "error": detail})
+                continue
+            with _cfg_lock:
+                t = _cfg.get("tasks", {}).get(dest)
+                if t is None: raise RuntimeError("任务不存在")
+                if op == "stop":
+                    t["want_run"] = False
+                    t["last_msg"] = time.strftime("%T") + " 已暂停(批量)"
+                    save_cfg(); actions.append(("stop", t))
+                else:
+                    if t.get("want_run"): raise RuntimeError("已在运行, 跳过")
+                    active = [x for x in _cfg["tasks"].values() if x.get("want_run")]
+                    maxm = max(1, int(_cfg.get("max_models") or 1))
+                    if len(active) >= maxm: raise RuntimeError("并发已满(最多 %d 个)" % maxm)
+                    t["want_run"] = True
+                    t["last_msg"] = time.strftime("%T") + " 已继续(批量)"
+                    save_cfg(); actions.append(("start", t))
+            done += 1
+        except Exception as e:
+            failed.append({"dest": dest, "error": str(e)})
+    for a, t in actions:            # 进程操作放锁外
+        if a == "stop": stop_task(t)
+        else: launch(t)
+    if op != "start": _fill_queue()
+    return {"ok": True, "op": op, "done": done, "total": len(dests), "failed": failed}
 
 def _safe_task_dest(dest):
     """任务删除时的目录校验: 任务保存目录可由用户自定义, 因此必须挡住系统性误删。
