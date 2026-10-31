@@ -115,7 +115,12 @@ def save_cfg():
     """原子写: 先写临时文件再 replace, 避免写一半崩溃损坏配置"""
     try:
         tmp = CFG_F + ".tmp"
-        with open(tmp, "w") as f:
+        # 权限 600: 配置里含访问口令, 不能让本机其他进程读到
+        # (os.replace 会沿用临时文件的模式, 所以要在创建时就设好)
+        try: os.unlink(tmp)
+        except OSError: pass
+        fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             json.dump(_cfg, f, ensure_ascii=False, indent=2)
         os.replace(tmp, CFG_F)
     except OSError as e:
@@ -166,12 +171,23 @@ def parse_repo(text):
     return repo if re.match(r"^[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+$", repo) else None
 
 def hf_api(path, endpoint_key, timeout=25):
-    req = urllib.request.Request(ENDPOINTS[endpoint_key] + path,
-                                 headers={"Accept": "application/json", "User-Agent": "hf-model-downloader"})
+    """先不带凭据请求; 只有 401/403(gated/私有仓库)时才带 token 重试。
+    此前无论什么仓库都无条件附带 Authorization, 等于把用户的 HF 凭据发给第三方镜像
+    (hf-mirror.com)——公开仓库根本不需要鉴权。"""
+    url = ENDPOINTS[endpoint_key] + path
+    def _get(tok):
+        req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                                   "User-Agent": "hf-model-downloader"})
+        if tok: req.add_header("Authorization", "Bearer " + tok)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
     tok = read_token()
-    if tok: req.add_header("Authorization", "Bearer " + tok)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        return _get(None)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403) and tok:
+            return _get(tok)
+        raise
 
 def analyze_repo(repo, endpoint_key):
     try:
@@ -409,6 +425,9 @@ def handle_control(data, local=False):
         v = str(data.get("token", "")).strip()
         if v == "auto": v = secrets.token_hex(4)          # 8 位十六进制
         if v and len(v) < 4: return {"ok": False, "error": "口令至少 4 位"}
+        # 反向漏洞: 局域网已开启时清空口令, 等于把无鉴权的服务暴露给同网段
+        if not v and _cfg.get("lan"):
+            return {"ok": False, "error": "局域网访问已开启，不能清空口令；请先在「访问范围」切回「仅本机」"}
         with _cfg_lock:
             _cfg["access_token"] = v
             save_cfg()
@@ -653,7 +672,12 @@ def handle_control(data, local=False):
                 r = expand(data["default_root"].strip())
                 if r: _cfg["default_root"] = r
             if data.get("username"): _cfg["username"] = data["username"].strip() or _cfg["username"]
-            if "lan" in data: _cfg["lan"] = bool(data.get("lan"))  # 即时生效, 无需重启(服务始终监听 0.0.0.0)
+            if "lan" in data:
+                want_lan = bool(data.get("lan"))
+                # 开局域网 = 把服务暴露给同网段所有人, 必须先有口令; 否则任何人都能改配置/删模型
+                if want_lan and not (_cfg.get("access_token") or ""):
+                    return {"ok": False, "error": "开启局域网访问前必须先设置访问口令（在「默认设置 → 访问口令」里点「生成随机口令」）"}
+                _cfg["lan"] = want_lan   # 即时生效, 无需重启(服务始终监听 0.0.0.0)
             old_sp = _cfg.get("speed_limit", 0)
             if "speed_limit" in data:
                 _cfg["speed_limit"] = _clamp(data.get("speed_limit"), 0, 10000, old_sp)

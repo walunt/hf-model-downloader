@@ -865,3 +865,32 @@ heredoc——内层那个 `PY` **提前终止了外层 heredoc**，后面的 `fi
 
 本轮只做检查与文档，**没有**修 P0/P1 的功能性问题——按用户"分步骤 + 明确顺序与预期"的偏好，
 问题已全部沉淀到进度文档第六节并排出优先级，等用户拍板后再动手。
+
+## 四十七、v3.46–v3.48（按建议顺序依次修复）
+
+用户拍板「先做 1、16，之后依次修改」，这三个版本对应建议 1、16、2、3、4、5。
+
+### v3.46 —— 建议 1（补 import sys）+ 建议 16（测试固化入库）
+见上一节文档补充里的问题清单与本次提交说明。要点：`sys` 补上后，未捕获异常不再被
+`NameError` 掩盖；渲染测试从 `/tmp` 搬进 `tests/render.test.js`（84 项），路径基于
+`__dirname`、临时文件走 `os.tmpdir()`，配 `tests/run.sh`。
+
+### v3.47 —— 建议 2（统一 `_safe_dest()`）
+抽 `_safe_dest(dest, must_exist=False)`：要求 `realpath` 严格落在 `default_root` 内，
+拒绝根/主目录/模型根本身，并**逐层**排除符号链接。接入 `start_new`/`enqueue`/
+`resume_history`/`open_dir` 四个入口，`_safe_task_dest` 内部复用。
+原 `_safe_task_dest` 的两个绕过：只挡祖先不挡后代（`~/Documents` 放行）、软链只查叶子
+（父级软链 `/tmp/a -> ~/Documents` 可逃逸）。
+`open_dir` 同时改用校验后的 realpath 防 TOCTOU，并去掉会被注入扩大的 tasks/history 兜底。
+
+### v3.48 —— 建议 3/4/5（三项 P1）
+- `hf_api()`：先不带凭据请求，401/403 才带 token 重试。公开仓库不再把凭据发给第三方镜像
+- `save_cfg()`：`os.open(tmp, O_CREAT|O_WRONLY|O_TRUNC, 0o600)` 再 replace → 配置权限 0600
+- 开局域网强制先设口令；且**已开启时不允许清空口令**（补反向漏洞）
+
+### 踩坑：commit message 里的反引号被 shell 执行
+用 `git commit -F - <<'EOF'` 写提交信息时，正文中的反引号（如 `` `open_dir` ``）
+被 zsh 当成命令替换执行 → `command not found: open_dir` + `parse error`，
+**且整个命令块（含前面的 git add 与文档更新）都没执行**，容易被误以为已提交。
+**规则：提交信息一律先用 python 写进文件，再 `git commit -F 文件`**，不要裸 heredoc。
+（这与 v3.44 的 heredoc 标记撞车是同一类问题：往 shell 里塞含特殊字符的大段文本要格外小心。）
