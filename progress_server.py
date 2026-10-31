@@ -578,7 +578,9 @@ def handle_control(data):
                 task["last_msg"] = time.strftime("%T") + " 分片调整为 %d" % nj
                 save_cfg(); act = "set_j"
             elif action == "remove_task":
-                # 只移除任务条目, 不动磁盘文件(删除文件请用模型库的「删除」)
+                # 移除任务条目, 并按 mode 处理已下载的本地目录:
+                #   keep=只移除任务(保留文件) / trash=移入废纸篓(默认, 可恢复) / purge=彻底删除
+                rm_mode = data.get("mode") if data.get("mode") in ("keep", "trash", "purge") else "trash"
                 task["want_run"] = False
                 tasks.pop(dest, None)
                 save_cfg(); act = "remove"
@@ -597,12 +599,33 @@ def handle_control(data):
         _restart_tasks([task])
     elif act == "remove":
         dkey = task.get("dest", "")
-        stop_task(task)                       # 在下载则先精确停掉进程组, 避免留下孤儿进程
+        stop_task(task)                       # 必须先停进程组: 边写边删会产生残缺文件与竞态
         _task_state.pop(dkey, None)           # 清自动重启节流状态
         with _slock:
             _task_sample.pop(dkey, None); _task_rates.pop(dkey, None)
+        detail = "任务已移除"
+        target = None
+        if rm_mode != "keep" and dkey:
+            target, err = _safe_task_dest(dkey)
+            if err:
+                detail += "；本地目录未删除：" + err
+            elif not os.path.exists(target):
+                detail += "；本地无目录，无需删除"
+            elif rm_mode == "trash":
+                tgt = _to_trash(target)
+                detail += "，模型目录已移入废纸篓（可恢复）" if tgt else \
+                          "；但目录无法移入废纸篓（可能跨卷），请改用彻底删除"
+            else:
+                try:
+                    shutil.rmtree(target)
+                    detail += "，模型目录已彻底删除"
+                except Exception as e:
+                    detail += "；但目录删除失败：%s" % e
+        for k in (dkey, target):              # 同时清原始键与 realpath 后的键
+            if k:
+                _meta_cache.pop(k, None); _scan_cache.pop(k, None)
         _fill_queue()                         # 释放的并发名额让队列补位
-        return {"ok": True, "removed": True, "dest": dkey}
+        return {"ok": True, "removed": True, "dest": dkey, "mode": rm_mode, "detail": detail}
     return {"ok": True, "task": task, "dl_running": dl_running()}
 
 def public_cfg():
@@ -944,6 +967,22 @@ def _delete_worker(dest, repo, mode):
         else: _del_err.pop(repo, None)
         _deleting.pop(repo, None)
         print("[删除] %s (%s) -> %s" % (repo, mode, msg or "完成"), flush=True)
+
+def _safe_task_dest(dest):
+    """任务删除时的目录校验: 任务保存目录可由用户自定义, 因此必须挡住系统性误删。
+    拒绝: 根目录 / 主目录 / 模型根目录本身, 以及它们的上级目录, 还有符号链接。"""
+    if not dest: return None, "目录为空"
+    raw = expand(dest)
+    if os.path.islink(raw): return None, "目标是符号链接, 已拒绝删除"
+    d = os.path.realpath(raw)
+    home = os.path.realpath(os.path.expanduser("~"))
+    root = os.path.realpath(expand(_cfg.get("default_root") or ""))
+    if not d or d == os.sep: return None, "拒绝删除根目录"
+    if d in {os.sep, home, root}: return None, "拒绝删除系统目录/主目录/模型根目录本身"
+    for f in (home, root):
+        if f and f != d and f.startswith(d + os.sep):
+            return None, "拒绝删除上级目录(会波及其他模型)"
+    return d, None
 
 # ---------------- 本地模型库 ----------------
 def _models_resp(models, total, truncated):

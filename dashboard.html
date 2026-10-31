@@ -120,8 +120,20 @@
     </div>
   </div>
 </div>
+<div id="rmTaskModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;max-width:520px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.5)">
+    <div style="font-size:14px;font-weight:600;margin-bottom:8px">删除下载任务</div>
+    <div style="font-size:12px;color:var(--dim);margin-bottom:14px;white-space:pre-wrap;word-break:break-all" id="rmTaskBody">--</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" id="rmTaskCancel">取消</button>
+      <button class="btn" id="rmTaskKeep">仅移除任务</button>
+      <button class="btn primary" id="rmTaskTrash">移到废纸篓（可恢复）</button>
+      <button class="btn del" id="rmTaskPurge">彻底删除</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v2.29 · 本系统由核桃制作</span></h1>
+  <h1>HuggingFace 模型下载器<span class="ver">v2.30 · 本系统由核桃制作</span></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
   <!-- 新建下载 -->
@@ -581,21 +593,34 @@ async function taskOp(action, i){
   else toast(action==="stop"?"✔ 已暂停 "+t.repo:"✔ 已继续 "+t.repo);
   refresh();
 }
-// 删除任务: 只移除任务卡片, 不删任何本地文件(删文件用模型库的删除)
-async function removeTask(i){
+// 删除任务: 移除任务卡片, 并按所选方式处理已下载的本地目录
+let rmTaskTarget=null;
+function removeTask(i){
   const t=lastTasks[i]; if(!t) return;
+  rmTaskTarget=t;
   const running = t.want_run && t.alive;
-  const pct = t.pct.toFixed(1);
-  let msg = "从下载任务列表移除："+t.repo+"\n保存目录："+t.dest+"\n当前进度："+pct+"%\n\n";
-  msg += running ? "该任务正在下载，将先停止下载（已下载的文件保留，之后可从「最近任务」续传）。\n\n"
-                 : "已下载的文件会保留，之后可从「最近任务」重新续传。\n\n";
-  msg += "只移除任务卡片，不删除任何本地文件。\n要删除已下载的模型文件，请用「本地模型库」的「删除」。\n\n确认移除？";
-  if(!confirm(msg)) return;
-  const d=await post({action:"remove_task", dest:t.dest});
-  if(!d.ok) toast("移除失败："+d.error, false);
-  else toast("✔ 已移除任务："+t.repo);
-  refresh();
+  $("rmTaskBody").textContent =
+    t.repo+"\n保存目录："+t.dest+"\n当前进度："+t.pct.toFixed(1)+"% · 已下载 "+fmtAuto(t.downloaded||0)+
+    (running ? "\n该任务正在下载，会先停止下载。" : "")+
+    "\n\n· 仅移除任务：卡片消失，已下载文件保留，之后可从「最近任务」续传"+
+    "\n· 移到废纸篓：连模型目录一起移入废纸篓，秒级且可在废纸篓恢复，清空废纸篓后才释放空间"+
+    "\n· 彻底删除：连模型目录一起抹除，不可恢复，空间立即释放";
+  $("rmTaskModal").style.display="flex";
 }
+$("rmTaskCancel").onclick=()=>{ $("rmTaskModal").style.display="none"; rmTaskTarget=null; };
+async function doRemoveTask(mode){
+  const t=rmTaskTarget; $("rmTaskModal").style.display="none"; rmTaskTarget=null;
+  if(!t) return;
+  if(mode==="purge" && !confirm("彻底删除不可恢复：\n"+t.repo+"\n目录 "+t.dest+"\n已下载 "+fmtAuto(t.downloaded||0)+
+      "\n\n确认移除任务并抹除本地文件？")) return;
+  const d=await post({action:"remove_task", dest:t.dest, mode:mode});
+  if(!d.ok){ toast("删除失败："+d.error, false); return; }
+  toast("✔ "+(d.detail||"已移除任务"), true);
+  refresh(); setTimeout(loadLib, 900);
+}
+$("rmTaskKeep").onclick=()=>doRemoveTask("keep");
+$("rmTaskTrash").onclick=()=>doRemoveTask("trash");
+$("rmTaskPurge").onclick=()=>doRemoveTask("purge");
 
 // ---- 速度曲线（全局总速率）----
 function drawRate(hist,cur,free){
