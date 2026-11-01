@@ -584,6 +584,36 @@ def handle_control(data, local=False):
         if launch_target: launch(launch_target)
         return {"ok": True, "task": (launch_target or task), "queued": queued, "dl_running": dl_running()}
 
+    # batch_verify: 批量仅校验。串行执行 —— 同时算多个大模型的 sha256 会把磁盘 IO 打满,
+    # 反而每个都慢; 一个个来总体更快, 也能让看板逐个看到状态变化。
+    if action == "batch_verify":
+        items = data.get("items") or []
+        pairs = []
+        for it in items:
+            it = it or {}
+            repo = parse_repo(it.get("repo", ""))
+            dest = expand(it.get("dest") or "")
+            if not repo or not dest: continue
+            d, derr = _safe_dest(dest)          # 同样要求落在模型根目录内
+            if not d: continue
+            pairs.append((repo, d, dest))
+        if not pairs:
+            return {"ok": False, "error": "没有可校验的模型"}
+        def _batch_verify_worker(ps):
+            for repo, real, orig in ps:
+                try:
+                    pid = launch_verify(repo, real)
+                    # 等这一个跑完再启下一个(不含 _pg_alive 的缓存, 直接查进程组)
+                    for _ in range(7200):       # 最多等 2 小时
+                        try: os.killpg(pid, 0)
+                        except OSError: break
+                        time.sleep(1)
+                except Exception:
+                    _log_exc("批量校验")
+            print("[批量校验] 已完成 %d 个模型" % len(ps), flush=True)
+        threading.Thread(target=_batch_verify_worker, args=(pairs,), daemon=True).start()
+        return {"ok": True, "queued": len(pairs)}
+
     # resume_history: mode=resume(断点续传) / verify(仅校验) / redownload(删本地后全量重下)
     if action == "resume_history":
         repo = parse_repo(data.get("repo", "")); dest = expand((data.get("dest") or "").strip())
@@ -1109,22 +1139,37 @@ def _disk_watcher():
                 act = [t for t in list(_cfg.get("tasks", {}).values())
                        if t.get("want_run") and _pg_alive(t.get("pgid"))]
             if not act: continue
-            need = 2 * 1e9
+            # 按所在卷分组: 任务分散在多块硬盘时, 不能拿第一个卷的余量去卡所有任务
+            # (否则外接盘还剩 2TB, 却因为系统盘紧张把外接盘上的任务一起暂停)
+            groups = {}
             for t in act:
-                tot, _, _ = metadata(t["dest"]); have = scan(t["dest"])[0]
-                total = tot or t.get("total") or 0
-                if total: need += (total - have) * 1.05
-            free = disk_free(act[0]["dest"])
-            if free < need:
-                with _cfg_lock:
-                    for t in act:
-                        t["want_run"] = False
-                        t["last_msg"] = time.strftime("%T") + " 磁盘空间不足, 已自动暂停"
-                    save_cfg()
-                for t in act: stop_task(t)
-                _run(["osascript", "-e",
-                      'display notification "剩余可用 ' + ("%.1f" % (free / 1e9)) + 'GB 不足, 已自动暂停; 清理磁盘后可点「继续」" with title "HF 模型下载器" subtitle "磁盘空间不足"'])
-                print("[磁盘预检] 空间不足, 已暂停 %d 个任务" % len(act), flush=True)
+                try: vol = os.stat(t["dest"]).st_dev
+                except OSError: vol = 0
+                groups.setdefault(vol, []).append(t)
+            hit = []
+            for vol, ts in groups.items():
+                need = 2 * 1e9
+                for t in ts:
+                    tot, _, _ = metadata(t["dest"]); have = scan(t["dest"])[0]
+                    total = tot or t.get("total") or 0
+                    if total: need += (total - have) * 1.05
+                free = disk_free(ts[0]["dest"])
+                if free < need:
+                    print("[磁盘预检] 卷 %s 空间不足: 需要 %.1fGB, 可用 %.1fGB, 暂停该卷 %d 个任务"
+                          % (vol, need / 1e9, free / 1e9, len(ts)), flush=True)
+                    hit.extend(ts)
+            if not hit: continue
+            act = hit
+            free = disk_free(act[0]["dest"])   # 通知文案用: 取首个受影响任务所在卷
+            with _cfg_lock:
+                for t in act:
+                    t["want_run"] = False
+                    t["last_msg"] = time.strftime("%T") + " 磁盘空间不足, 已自动暂停"
+                save_cfg()
+            for t in act: stop_task(t)
+            _run(["osascript", "-e",
+                  'display notification "剩余可用 ' + ("%.1f" % (free / 1e9)) + 'GB 不足, 已自动暂停; 清理磁盘后可点「继续」" with title "HF 模型下载器" subtitle "磁盘空间不足"'])
+            print("[磁盘预检] 空间不足, 已暂停 %d 个任务" % len(act), flush=True)
         except Exception:
             _log_exc("磁盘预检线程")
 threading.Thread(target=_disk_watcher, daemon=True).start()

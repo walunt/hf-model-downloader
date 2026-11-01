@@ -78,6 +78,7 @@
   .badge.run { color:var(--ok); border-color:var(--bd-ok); background:var(--bg-ok); }
   .badge.live { color:#5aa8ff; border-color:var(--bd-live); background:var(--bg-live); }  /* 下载中: 蓝色, 与已完成的绿色区分 */
   .badge.stop { color:var(--warn); border-color:var(--bd-warn); background:var(--bg-warn); }
+  .badge.idle { color:var(--dim); border-color:var(--line); background:var(--inset2); }   /* 已暂停: 中性灰 */
   .badge.verify { color:#2fd3e0; border-color:var(--bd-verify); background:var(--bg-verify); }  /* 校验中: 青色, 与琥珀的已暂停区分 */
   .badge.bad { color:var(--red); border-color:var(--bd-bad); background:var(--bg-bad); }
   .tag { font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--line); color:var(--dim); }
@@ -335,7 +336,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.50 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.51 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -507,11 +508,14 @@
     <h2>本地模型库 <span class="badge" id="libCount">--</span>
       <input id="libSearch" type="search" placeholder="搜索模型（org/name）" autocomplete="off">
       <button class="btn sm" id="btnBackfill" style="display:none">补全元数据</button>
+      <label id="hideEmptyWrap" style="display:none;align-items:center;gap:4px;font-size:12px;color:var(--dim);cursor:pointer" title="隐藏只有元数据、没有实际文件的空壳目录">
+        <input type="checkbox" id="hideEmpty" style="accent-color:#2f6bff"> 隐藏空壳</label>
       <button class="btn sm" id="btnBatchLib">批量</button>
       <button class="btn sm" id="refreshLib" style="margin-left:auto">刷新</button></h2>
     <div class="batchbar" id="libBatchBar">
       <span class="hint" id="libBatchInfo">已选 0 项</span>
       <button class="btn sm" id="btnLibAll">全选</button>
+      <button class="btn sm" id="btnLibVerify">重新校验</button>
       <button class="btn sm" id="btnLibTrash">移到废纸篓</button>
       <button class="btn sm del" id="btnLibPurge">彻底删除</button>
       <button class="btn sm" id="btnLibCancel">取消</button>
@@ -744,9 +748,14 @@ function renderLibRows(){
   const all = libModels || [];
   const q = (($("libSearch")||{}).value || "").trim().toLowerCase();
   const pairs = all.map((m,i)=>({m:m, i:i}));
-  const shown = q ? pairs.filter(p=>(p.m.repo||"").toLowerCase().includes(q)) : pairs;
+  let shown = q ? pairs.filter(p=>(p.m.repo||"").toLowerCase().includes(q)) : pairs;
+  // 可选: 隐藏"空壳"(只有元数据、没有实际文件), 默认显示以便管理
+  const hideEmpty = ($("hideEmpty")||{}).checked;
+  const emptyN = pairs.filter(p=>!p.m.bytes).length;
+  if(hideEmpty) shown = shown.filter(p=>p.m.bytes > 0);
   libShown = shown.map(p=>p.m.repo);
-  const note = q ? '<div class="hint" style="margin-bottom:6px">匹配 '+shown.length+' 个 / 共 '+all.length+' 个</div>' : "";
+  let note = q ? '<div class="hint" style="margin-bottom:6px">匹配 '+shown.length+' 个 / 共 '+all.length+' 个</div>' : "";
+  if(hideEmpty && emptyN) note += '<div class="hint" style="margin-bottom:6px;color:var(--dim)">已隐藏 '+emptyN+' 个空壳目录（只有元数据、无实际文件）</div>';
   if(!shown.length){
     $("lib").innerHTML = libTrunc + libErrBox + note + '<span class="hint">没有匹配的模型，换个关键词试试</span>';
     updateBatchBars(); return;
@@ -774,6 +783,13 @@ async function loadLib(){
     const errKeys=Object.keys(derr);
     libErrBox = errKeys.length
       ? '<div class="hint" style="margin-bottom:6px;color:var(--red)">删除未完成：'+errKeys.map(k=>esc(k)+' — '+esc(derr[k])).join('；')+'</div>' : "";
+    // 空壳开关: 只有存在"只有元数据、没实际文件"的目录时才显示; 勾选状态记在本机
+    try{
+      const empN = models.filter(m=>!m.bytes).length;
+      const hw = $("hideEmptyWrap");
+      if(hw) hw.style.display = empN ? "flex" : "none";
+      $("hideEmpty").checked = localStorage.getItem("hfHideEmpty") === "1";
+    }catch(e){}
     renderLibRows();
     // 「补全元数据」: 只在存在"总量未知"的模型时出现; 补全进行中显示剩余并自动轮询
     const bf = d.backfill || {};
@@ -920,6 +936,18 @@ $("btnCleanHist").onclick = async () => {
   toast("✔ 已清理 " + d.removed + " 条失效记录");
   refresh();
 };
+$("btnLibVerify").onclick = async () => {
+  const idxs=[...selLib];
+  if(!idxs.length) return;
+  const items = idxs.map(r=>{ const m=(libModels||[]).find(x=>x.repo===r); return m?{repo:m.repo,dest:m.dest}:null; })
+                    .filter(Boolean);
+  if(!items.length) return;
+  if(!confirm("重新校验这 " + items.length + " 个模型？\n\n只比对 sha256，不下载任何文件；会逐个串行执行（避免同时读盘把机器拖慢）。")) return;
+  const d = await post({action:"batch_verify", items:items});
+  if(!d.ok){ toast("校验失败：" + d.error, false); return; }
+  toast("✔ 已开始串行校验 " + d.queued + " 个模型，可在「下载日志」看进度");
+  setTimeout(loadLib, 5000);
+};
 $("btnLibTrash").onclick = () => batchDelModels("trash");
 $("btnLibPurge").onclick = () => batchDelModels("purge");
 
@@ -993,12 +1021,13 @@ function taskBadge(t, dlRunning){
   }
   if(!t.want_run){
     if(t.verify && !t.verify.bad && !t.verify.miss && t.verify.ok===t.verify.total) return {txt:"✔ 已完成", cls:"run"};
-    return {txt:"■ 已暂停", cls:"stop"};
+    return {txt:"■ 已暂停", cls:"idle"};   // 用户主动暂停 → 中性灰
   }
   // want_run 但进程不在: 完成 / 等待自动重启
   if(t.verify && !t.verify.bad && !t.verify.miss && t.verify.ok===t.verify.total) return {txt:"✔ 已完成", cls:"run"};
   if(t.pct>=99.99 && t.downloaded>=t.total-1048576) return {txt:"✔ 已完成", cls:"run"};
-  return {txt:"○ 等待中", cls:"stop"};
+  // 想下载但进程不在(刚点继续 / 崩溃等自动重启 / 等并发空位) → 琥珀, 与"已暂停"区分
+  return {txt:"○ 等待启动", cls:"stop"};
 }
 
 // ---- 任务列表: 卡片 / 列表 两种视图(共用同一份数据与操作, 选择记忆在 localStorage) ----
@@ -1480,6 +1509,10 @@ applyTheme((() => { try { return localStorage.getItem("hfTheme") || "dark"; } ca
 
 // ---- 模型库搜索：只过滤显示，不改下标 ----
 $("libSearch").oninput = () => renderLibRows();
+$("hideEmpty").onchange = () => {
+  try { localStorage.setItem("hfHideEmpty", $("hideEmpty").checked ? "1" : "0"); } catch(e){}
+  renderLibRows();
+};
 
 // ---- 队列多选移除 ----
 $("btnBatchQueue").onclick = () => {

@@ -277,6 +277,42 @@ setTaskView("list");
 check("列表视图渲染出表格", (document.getElementById("tasks").innerHTML||"").includes("taskTable"), (document.getElementById("tasks").innerHTML||"").slice(0, 80));
 setTaskView("card");
 
+// === L) 体验项 12/14/15 ===
+console.log("=== L) 空壳隐藏 / 批量重新校验 / 暂停与等待的区分 ===");
+// I 组最后测过"空模型库"，先把正常数据装回来
+global.fetch = async () => ({ status: 200, json: async () => payload });
+await loadLib();
+// 15) 已暂停=中性灰(idle)，等待启动=琥珀(stop)，两者不能同色同文案
+const paused = task({ want_run: false, alive: false, pct: 30, verify: null });
+const waiting = task({ want_run: true, alive: false, pct: 30, verify: null });
+check("已暂停 → cls=idle(灰)", taskBadge(paused, true).cls === "idle", taskBadge(paused, true).cls);
+check("已暂停文案含「已暂停」", taskBadge(paused, true).txt.includes("已暂停"));
+check("等待启动 → cls=stop(琥珀)", taskBadge(waiting, true).cls === "stop", taskBadge(waiting, true).cls);
+check("等待启动文案明确(不是含糊的「等待中」)",
+      taskBadge(waiting, true).txt.includes("等待启动"), taskBadge(waiting, true).txt);
+check("两者徽标类不同(能一眼分开)",
+      taskBadge(paused, true).cls !== taskBadge(waiting, true).cls);
+
+// 12) 隐藏空壳: 勾选后 bytes=0 的条目应被过滤
+const beforeHide = document.getElementById("lib").innerHTML;
+check("默认能看见 bytes=0 的空壳(t/in-queue)", beforeHide.includes("t/in-queue"));
+document.getElementById("hideEmpty").checked = true;
+renderLibRows();
+const afterHide = document.getElementById("lib").innerHTML;
+check("勾选后空壳被隐藏", !afterHide.includes("t/in-queue"));
+check("给出了隐藏提示", afterHide.includes("已隐藏") && afterHide.includes("空壳"), afterHide.slice(0, 160));
+check("非空的模型仍在", afterHide.includes("t/interrupted"));
+document.getElementById("hideEmpty").checked = false;
+renderLibRows();
+
+// 14) 批量重新校验: 按钮存在且绑定了 batch_verify
+// 注: selLib 是 let 声明, 不会泄漏到 global(与 expandSet 同理), 故不模拟点击,
+// 改为验证按钮渲染 + 源码里确实用 batch_verify 且带 items
+check("批量栏有「重新校验」按钮", html.includes('id="btnLibVerify"'));
+check("绑定了 batch_verify 动作", html.includes('action:"batch_verify"') && html.includes("items:"));
+check("批量校验会带上 dest", /repo:m\.repo,\s*dest:m\.dest/.test(html) || html.includes("dest:m.dest"));
+check("提示文案说明是串行执行", html.includes("串行"));
+
 // === K) 下载脚本的续传预检（提取真实代码执行，防止改坏）===
 console.log("=== K) hf_download.sh 续传预检 ===");
 try {
