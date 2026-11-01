@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import glob
+import time
 import shutil
 import tempfile
 
@@ -153,6 +154,75 @@ for ln in src_txt.split("\n"):
     if st.startswith("for dest, t in tasks.items():") and "list(" not in st:
         bad.append(st[:70])
 check("没有裸遍历 _cfg 容器的 for 循环", not bad, bad)
+
+print("=== I) _restart_tasks 后台异步（不再阻塞请求线程）===")
+# 原实现在请求线程内同步跑: 每任务 stop_task(sleep 2.5s) + sleep(1s) ≈ 3.5s,
+# 5 个任务最坏让 POST 挂 17.5s。改异步后调用应立即返回。
+launched = []
+threads_started = []
+real_launch = ns["launch"]
+real_pg = ns["_pg_alive"]
+real_thread = ns["threading"].Thread
+
+
+class _FakeThread:
+    def __init__(self, target=None, args=(), daemon=None):
+        self.target = target
+        self.args = args
+
+    def start(self):
+        threads_started.append(1)
+        real_thread(target=self.target, args=self.args, daemon=True).start()
+
+
+try:
+    ns["_pg_alive"] = lambda pgid: False          # 进程不在 → 走纯 launch 分支，不做真进程操作
+    ns["launch"] = lambda t: launched.append(t.get("dest"))
+    ns["threading"].Thread = _FakeThread
+    ns["_cfg"]["tasks"] = {}
+    ns["_restart_q"].clear()
+    ns["_restart_busy"][0] = False
+
+    tasks = []
+    for i in range(4):
+        d = "/tmp/restart-probe/%d" % i
+        t = {"repo": "t/r%d" % i, "dest": d, "want_run": True, "x": 8, "j": 1}
+        ns["_cfg"]["tasks"][d] = t
+        tasks.append(t)
+
+    t0 = time.time()
+    ns["_restart_tasks"](tasks)
+    cost = time.time() - t0
+    check("调用立即返回（<0.5s，同步时会是 3.5s×4）", cost < 0.5, "耗时 %.2fs" % cost)
+    check("起了 1 个后台线程", len(threads_started) == 1, threads_started)
+
+    for _ in range(60):
+        if len(launched) >= 4:
+            break
+        time.sleep(0.1)
+    check("4 个任务都被后台重启", len(launched) == 4, launched)
+    check("重启后队列已清空", len(ns["_restart_q"]) == 0, ns["_restart_q"])
+
+    # 单飞: 已有线程在跑时不重复起线程（否则两个线程会同时 stop/launch 同一任务）
+    ns["_restart_busy"][0] = True
+    ns["_restart_q"].clear()
+    before = len(threads_started)
+    ns["_restart_tasks"]([tasks[0]])
+    check("已有线程在跑时不重复起线程", len(threads_started) == before,
+          "新增 %d 个" % (len(threads_started) - before))
+    check("任务被排进队列等待消费", len(ns["_restart_q"]) == 1, ns["_restart_q"])
+
+    # 不想下载的任务不该进队列
+    ns["_restart_q"].clear()
+    ns["_restart_tasks"]([{"repo": "t/x", "dest": "/tmp/x", "want_run": False}])
+    check("未运行的任务不排队", len(ns["_restart_q"]) == 0, ns["_restart_q"])
+finally:
+    ns["launch"] = real_launch
+    ns["_pg_alive"] = real_pg
+    ns["threading"].Thread = real_thread
+    ns["_restart_busy"][0] = False
+    ns["_restart_q"].clear()
+    ns["_cfg"]["tasks"] = {}
 
 print("\n结果: %d 通过 / %d 失败" % (passed, failed))
 sys.exit(1 if failed else 0)

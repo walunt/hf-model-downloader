@@ -393,21 +393,60 @@ def _clamp(v, lo, hi, d):
     try: return max(lo, min(hi, int(v)))
     except (TypeError, ValueError): return d
 
-def _restart_tasks(tasks):
-    """锁外: 对分片/限速变化的任务 stop→launch 生效(断点续传); 跳过校验/完成/失败阶段"""
-    for t in tasks:
-        if not t.get("want_run"): continue
+def _restart_one(t):
+    """单个任务: stop → launch, 让新参数(线程数/限速/分片)生效。断点续传, 已下载部分不丢。"""
+    try:
+        if not t.get("want_run"): return
         if not _pg_alive(t.get("pgid")):
             with _cfg_lock:
                 if _cfg.get("tasks", {}).get(t["dest"]) is t:
                     launch(t)
-            continue
+            return
         ph = _phase_of(t)
-        if ph in ("verifying", "done", "failed"): continue
+        if ph in ("verifying", "done", "failed"): return
         stop_task(t); time.sleep(1)
         with _cfg_lock:
             if _cfg.get("tasks", {}).get(t["dest"]) is t and t.get("want_run"):
                 launch(t)
+    except Exception:
+        _log_exc("任务重启")
+
+# 后台重启队列: 单飞(同时只有一个线程在跑), 避免并发 stop/launch 同一任务
+_restart_q = []             # 待重启的任务
+_restart_busy = [False]     # 后台线程是否在运行
+_restart_qlock = threading.Lock()
+
+def _restart_worker():
+    while True:
+        with _restart_qlock:
+            if not _restart_q:
+                _restart_busy[0] = False
+                return
+            t = _restart_q.pop(0)
+        _restart_one(t)
+
+def _restart_tasks(tasks):
+    """把新设置应用到运行中的任务(stop→launch), **后台串行执行**, 请求立即返回。
+
+    原实现在请求线程内同步跑: 每个任务 stop_task 内部 sleep 2.5s + 此处 sleep 1s
+    ≈ 3.5s, 5 个任务最坏让 POST 挂 17.5s(前端转圈、轮询全卡住)。
+
+    用单飞队列而不是每次直接起线程: 若两次调整间隔很短, 两个线程同时 stop/launch
+    同一任务会出现"两个进程同时下载同一目录", 还可能 stop 掉刚启动的进程。
+    排进队列由同一个线程串行消费即可避免。
+
+    注: _fill_queue 只数 want_run(不看进程存活), 而 stop 后 want_run 仍为真,
+    所以异步化不会让补位逻辑误判出空位。
+    """
+    tasks = [t for t in (tasks or []) if t and t.get("want_run")]
+    if not tasks: return
+    with _restart_qlock:
+        for t in tasks:
+            if t not in _restart_q: _restart_q.append(t)
+        if _restart_busy[0]: return      # 已有线程在跑, 队列会被它消费完
+        _restart_busy[0] = True
+    threading.Thread(target=_restart_worker, daemon=True).start()
+    print("[任务重启] 已在后台排队重启 %d 个任务以应用新设置" % len(tasks), flush=True)
 
 # ---------------- 全局分片池分配 ----------------
 def _remaining(t):

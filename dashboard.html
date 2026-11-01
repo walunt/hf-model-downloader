@@ -336,7 +336,7 @@
   </div>
 </div>
 <div class="wrap">
-  <h1>HuggingFace 模型下载器<span class="ver">v3.51 · 本系统由核桃制作</span>
+  <h1>HuggingFace 模型下载器<span class="ver">v3.52 · 本系统由核桃制作</span>
     <button class="btn sm" id="btnTheme" title="切换浅色 / 深色主题">🌙 深色</button></h1>
   <div class="sub">hfd.sh + aria2 多线程 · 多模型并发下载 · 全局分片池自动分配 · 断点续传 · 自动 sha256 校验</div>
 
@@ -673,7 +673,7 @@ $("saveConsoleBtn").onclick=async()=>{
                       alloc_mode:$("cAllocMode").value, x:+$("cX").value,
                       speed_limit:+($("setSpeed").value)||0});
   btn.disabled=false; btn.textContent=o;
-  if(d.ok) $("cmsg").textContent="已保存并应用"+(d.restarted?" · 下载中任务已按新设置自动重启（断点续传）":"")+" · 并发模型数 "+d.cfg.max_models;
+  if(d.ok) $("cmsg").textContent="已保存并应用"+(d.restarted?" · 下载中的任务正在后台按新设置重启（断点续传，几秒内生效）":"")+" · 并发模型数 "+d.cfg.max_models;
   else $("cmsg").textContent="保存失败："+d.error;
   $("cmsg").style.color = d.ok ? "var(--acc)" : "var(--red)";
   setTimeout(()=>$("cmsg").textContent="", 5000);
