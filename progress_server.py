@@ -16,7 +16,10 @@ WINDOW_SEC, SAMPLE_SEC = 30, 5
 RATE_HIST_MAX = 360  # 5s 一个点, 保留 30 分钟速率历史用于曲线图
 MAX_CONN = 10        # hfd.sh 的 -x/-j 上限, 前后端共用此约束
 MAX_MODELS_LIMIT = 5 # 最大同时下载模型数上限
-MAX_MODELS_LIST = 200 # 模型库单次返回上限(防超大目录拖慢接口); 超限时接口返回 truncated, 由前端明确提示
+MAX_MODELS_LIST = 200
+# 扫描/元数据缓存上限: 必须 >= 模型列表上限, 否则模型一多缓存就频繁淘汰、等于没缓存,
+# 每次 /api/models 都要真扫全部目录(数十万次 stat)
+CACHE_MAX = max(200, MAX_MODELS_LIST) # 模型库单次返回上限(防超大目录拖慢接口); 超限时接口返回 truncated, 由前端明确提示
 CACHE_DIRS = ("_hf-cache",)  # hfd/HF Hub 缓存目录, 不是模型本体, 模型库需跳过
 
 def _own_ips():
@@ -95,7 +98,7 @@ _cfg.setdefault("access_token", "")  # 局域网访问口令(空=不校验); 本
 # 兼容 v2.0 旧值 "auto"(按剩余大小比例) → 新枚举名 "size"
 if _cfg.get("alloc_mode") == "auto": _cfg["alloc_mode"] = "size"
 # 队列任务补默认字段(旧任务可能缺)
-for t in _cfg.get("queue", []):
+for t in list(_cfg.get("queue", [])):
     t.setdefault("added_at", time.strftime("%F %T"))
 
 def _rotate_server_log(path=None, max_bytes=None, keep_bytes=None):
@@ -257,14 +260,25 @@ def analyze_repo(repo, endpoint_key):
 # ---------------- 进程控制(精确到任务进程组) ----------------
 def _run(cmd): subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def dl_running():
-    """任一任务进程组存活即为运行中; 无记录时回退模式匹配(仅状态显示, 可能误报但不误杀)"""
-    for t in _cfg.get("tasks", {}).values():
-        if _pg_alive(t.get("pgid")): return True
-    for pat in KILL_PATS:
-        if subprocess.run(["pgrep", "-f", pat], stdout=subprocess.DEVNULL).returncode == 0:
-            return True
-    return False
+_dlrun_cache = [0.0, False]      # (ts, value): 前端每秒轮询, 没必要每次都 fork pgrep
+
+def dl_running(force=False):
+    """任一任务进程组存活即为运行中; 无记录时回退模式匹配(仅状态显示, 可能误报但不误杀)。
+    结果缓存 2s: 原本每次 /api/status 都要 fork 最多 4 个 pgrep 扫全进程表。"""
+    now = time.time()
+    if not force and now - _dlrun_cache[0] < 2.0:
+        return _dlrun_cache[1]
+    with _cfg_lock:
+        task_snap = list((_cfg.get("tasks") or {}).values())
+    r = False
+    for t in task_snap:
+        if _pg_alive(t.get("pgid")): r = True; break
+    if not r:
+        for pat in KILL_PATS:
+            if subprocess.run(["pgrep", "-f", pat], stdout=subprocess.DEVNULL).returncode == 0:
+                r = True; break
+    _dlrun_cache[0] = now; _dlrun_cache[1] = r
+    return r
 
 _pg_check_cache = {}   # pgid -> (ts, bool): 轮询很频繁, ps 结果复用 1.5s
 
@@ -581,7 +595,7 @@ def handle_control(data, local=False):
         mode = data.get("mode") or "resume"
         # 仅校验: 独立进程, 不改 tasks, 不打断正在下载该目录的任务
         if mode == "verify":
-            for t in _cfg.get("tasks", {}).values():
+            for t in list(_cfg.get("tasks", {}).values()):
                 if t.get("dest") == dest and _pg_alive(t.get("pgid")):
                     return {"ok": False, "error": "该模型正在下载中, 请稍后再校验"}
             pid = launch_verify(repo, dest)
@@ -771,13 +785,13 @@ def handle_control(data, local=False):
                 _cfg["alloc_mode"] = am
             # 限速变化 → 重启所有运行中任务
             if speed_changed:
-                for t in _cfg.get("tasks", {}).values():
+                for t in list(_cfg.get("tasks", {}).values()):
                     if t.get("want_run"):
                         t["last_msg"] = time.strftime("%T") + " 限速调整, 自动重启生效"
                         restart_targets.append(t)
             # 每片线程数变化 → 应用到所有任务并重启运行中任务
             if x_changed:
-                for t in _cfg.get("tasks", {}).values():
+                for t in list(_cfg.get("tasks", {}).values()):
                     t["x"] = _cfg["x"]
                     if t.get("want_run"):
                         t["last_msg"] = time.strftime("%T") + " 每片线程调整为 %d" % _cfg["x"]
@@ -910,8 +924,8 @@ def metadata(dest):
         except Exception:
             return 0, {}, 0
         _meta_cache[dest] = (mt, tot, m, len(m))
-        if len(_meta_cache) > 60:  # 简单防膨胀
-            for k in list(_meta_cache)[:10]: _meta_cache.pop(k, None)
+        if len(_meta_cache) > CACHE_MAX:
+            for k in list(_meta_cache)[:20]: _meta_cache.pop(k, None)
     t = _meta_cache[dest]
     return t[1], t[2], t[3]
 
@@ -939,8 +953,8 @@ def scan(dest):
     active.sort(key=lambda x: -x[1])
     res = (total, done, fcnt, active[:10])
     _scan_cache[dest] = (now, res)
-    if len(_scan_cache) > 20:
-        for k in list(_scan_cache)[:5]: _scan_cache.pop(k, None)
+    if len(_scan_cache) > CACHE_MAX:
+        for k in list(_scan_cache)[:20]: _scan_cache.pop(k, None)
     return res
 
 def verify_result(dest):
@@ -971,7 +985,7 @@ def _sampler():
     while True:
         try:
             with _cfg_lock:
-                act = [t for t in _cfg.get("tasks", {}).values()
+                act = [t for t in list(_cfg.get("tasks", {}).values())
                        if t.get("want_run") and _pg_alive(t.get("pgid"))]
             now = time.time(); total_b = 0; rates = {}
             for t in act:
@@ -1092,7 +1106,7 @@ def _disk_watcher():
         time.sleep(10)
         try:
             with _cfg_lock:
-                act = [t for t in _cfg.get("tasks", {}).values()
+                act = [t for t in list(_cfg.get("tasks", {}).values())
                        if t.get("want_run") and _pg_alive(t.get("pgid"))]
             if not act: continue
             need = 2 * 1e9
@@ -1434,12 +1448,17 @@ def list_models():
     def _rp(x):
         try: return os.path.realpath(expand(x or ""))
         except OSError: return ""
+    # 加锁取快照: _queue_watcher 会持锁增删 tasks/queue, 直接遍历可能
+    # "RuntimeError: dictionary changed size during iteration"
+    with _cfg_lock:
+        task_snap = list((_cfg.get("tasks") or {}).values())
+        queue_snap = list(_cfg.get("queue") or [])
     active_dest = set()      # 下载中
-    for t in (_cfg.get("tasks") or {}).values():
+    for t in task_snap:
         if t.get("want_run") or _pg_alive(t.get("pgid")):
             active_dest.add(_rp(t.get("dest")))
     queued_dest = set()      # 已排队, 等空位
-    for q in (_cfg.get("queue") or []):
+    for q in queue_snap:
         queued_dest.add(_rp(q.get("dest")))
     root_rp = _rp(root)
     if not os.path.isdir(root):
@@ -1515,7 +1534,7 @@ def status_json():
                        "global_j": max(1, int(_cfg.get("global_j") or 10)),
                        "alloc_mode": _cfg.get("alloc_mode", "auto"),
                        "max_models_limit": MAX_MODELS_LIMIT}}
-    for dest, t in tasks.items():
+    for dest, t in list(tasks.items()):
         total_b, _, meta_cnt = metadata(dest)
         downloaded, done, fcnt, active = scan(dest)
         total = total_b or t.get("total") or 0

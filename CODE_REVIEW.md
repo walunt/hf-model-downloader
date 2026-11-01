@@ -933,3 +933,35 @@ heredoc——内层那个 `PY` **提前终止了外层 heredoc**，后面的 `fi
 
 **教训：`py_compile` 只查语法，查不出"名字在定义时还不存在"这类错误。
 改后端后除了语法检查，还要做一次真实加载。**
+
+## 四十九、v3.50（建议 9/11 + M2：性能与并发安全）
+
+### 9. 缓存上限与模型上限对齐
+`_scan_cache` 上限 20、`_meta_cache` 上限 60，而 `MAX_MODELS_LIST = 200`。
+模型超过 20 个后，缓存每次插入就淘汰 —— **等于没缓存**，每次 `/api/models`
+都要真扫全部目录（数十万次 `os.stat`）。
+新增 `CACHE_MAX = max(200, MAX_MODELS_LIST)`，两处统一使用。
+
+实测：造 25 个模型目录，缓存条目 25/25 全部命中（旧上限会被淘汰到 20 以下）；
+`/api/status` 二次请求 **0.117s → 0.006s（20 倍）**。
+（`/api/models` 冷 0.31s → 热 0.20s，收益不明显是因为测试目录文件太少，
+真实模型目录动辄数万文件，差距会大得多。）
+
+### 11. dl_running 结果缓存
+原本每次 `/api/status` 都要 fork 最多 4 个 `pgrep` 扫全进程表。
+改为缓存 2s（前端每秒轮询，2s 延迟无感知）。实测 3 次调用只 fork 1 次。
+
+### M2. 无锁遍历 _cfg 容器（此前标 `[待复核]`，本次核实并修复）
+`list_models` / `status_json` / `dl_running` 等 **8 处**在锁外直接遍历
+`_cfg["tasks"].values()` / `.items()`，而 `_queue_watcher` 每 8s 持锁增删这些容器 ——
+碰撞即 `RuntimeError: dictionary changed size during iteration`，
+配合（已修的）`sys` 缺失，表现为**接口偶发无响应**。
+统一改为 `list()` 快照（在锁内调用也无害，只多一次极小的列表拷贝）。
+
+### 测试增至 116 项
+后端 `tests/test_backend_load.py` 从 22 → 32 项，新增：
+- F 组：`CACHE_MAX >= MAX_MODELS_LIST`、缓存不再硬编码 20/60
+- G 组：`dl_running` 3 次调用只 fork 1 次 pgrep（mock `subprocess.run` 计数）
+- H 组：源码扫描，禁止再出现裸遍历 `_cfg` 容器的 `for` 循环
+
+`tests/run.sh` = 后端 32 + 渲染 84 = 116 项。
