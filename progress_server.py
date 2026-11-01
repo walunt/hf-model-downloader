@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROJ = os.path.dirname(os.path.abspath(__file__))  # 项目目录跟随脚本自身位置, 整体迁移无需改代码
 LOG  = os.path.join(PROJ, "download.log")
+SLOG = os.path.join(PROJ, "server.log")    # 服务自身日志(stdout 被重定向到这里)
 DL_SCRIPT = "hf_download.sh"
 CFG_F = os.path.join(PROJ, "dl_config.json")
 PORT = 8765
@@ -65,8 +66,18 @@ _cfg = {"default_root": os.path.expanduser("~/mlx-models"),
         "username": "", "history": [], "queue": [], "speed_limit": 0,
         "tasks": {}, "max_models": 2, "global_j": 10, "alloc_mode": "auto", "lan": False}
 if os.path.exists(CFG_F):
-    try: _cfg.update(json.load(open(CFG_F)))
-    except Exception: pass
+    try:
+        _cfg.update(json.load(open(CFG_F)))
+    except Exception as e:
+        # 配置损坏(异常退出/磁盘满写了一半)时: 先备份原文件再走默认值。
+        # 此前是静默 pass —— 随后 save_cfg() 会立刻用默认配置覆盖, 等于无声抹掉
+        # 全部任务记录 / 历史 / 访问口令, 且无线索可追回。
+        try:
+            bak = CFG_F + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S")
+            shutil.copy2(CFG_F, bak)
+            print("[配置] 读取失败(%s)，原文件已备份为 %s，本次使用默认配置" % (e, bak), flush=True)
+        except OSError as e2:
+            print("[配置] 读取失败(%s)，且备份失败: %s" % (e, e2), flush=True)
 _cfg.setdefault("queue", [])
 _cfg.setdefault("tasks", {})
 # 迁移: v1.x 单任务 current → tasks[dest]
@@ -86,6 +97,45 @@ if _cfg.get("alloc_mode") == "auto": _cfg["alloc_mode"] = "size"
 # 队列任务补默认字段(旧任务可能缺)
 for t in _cfg.get("queue", []):
     t.setdefault("added_at", time.strftime("%F %T"))
+
+def _rotate_server_log(path=None, max_bytes=None, keep_bytes=None):
+    """轮转服务自身日志(server.log)。
+
+    server.log 由启动脚本把 stdout 重定向而来, 不能像 rotate_log() 那样改写"别人的"文件:
+    截断之后必须把 stdout/stderr 的写指针拨回新的文件末尾, 否则下一次 print 会落在
+    旧偏移处, 把文件瞬间撑成一个巨大的**稀疏空洞**(ls 看几十 MB, 实际全是 0)。
+
+    触发: 队列看护每 8s 检查一次(与 download.log 同时)。
+    """
+    path = path or SLOG
+    max_bytes = max_bytes or LOG_MAX      # 运行时取值: 默认参数在定义时求值会拿到未定义的名字
+    keep_bytes = keep_bytes or LOG_KEEP
+    try:
+        if not os.path.isfile(path): return False
+        sz = os.path.getsize(path)
+        if sz <= max_bytes: return False
+        with open(path, "rb") as f:
+            f.seek(max(0, sz - keep_bytes)); tail = f.read()
+        for st in (sys.stdout, sys.stderr):
+            try: st.flush()
+            except Exception: pass
+        fd = os.open(path, os.O_WRONLY | os.O_TRUNC)
+        try:
+            os.write(fd, "[... 日志已轮转, 以下为最近部分 ...]\n".encode("utf-8") + tail)
+        finally:
+            os.close(fd)
+        # 关键: 把标准流写指针拨到新末尾(以 O_APPEND 打开时 lseek 无效, 但那本身不会产生空洞)
+        new_sz = os.path.getsize(path)
+        for st in (sys.stdout, sys.stderr):
+            try: os.lseek(st.fileno(), new_sz, os.SEEK_SET)
+            except Exception: pass
+        print("[日志] server.log 已轮转: %.1fMB -> %.1fMB" % (sz / 1e6, new_sz / 1e6), flush=True)
+        return True
+    except Exception as e:
+        try: print("[日志] server.log 轮转失败: %s" % e, flush=True)
+        except Exception: pass
+        return False
+
 
 def _log_exc(where):
     """被吞掉的异常打到 server.log(带堆栈): 线程不能因异常退出, 但必须留下排查线索"""
@@ -216,10 +266,31 @@ def dl_running():
             return True
     return False
 
+_pg_check_cache = {}   # pgid -> (ts, bool): 轮询很频繁, ps 结果复用 1.5s
+
 def _pg_alive(pgid):
+    """进程组是否存活。
+    不能只看 killpg(pgid, 0): pgid 持久化在配置里, 服务/机器重启后该号码可能已被内核
+    分配给**完全无关的进程组** —— 会误判"还在下载"而跳过续传; 更糟的是点「停止」时
+    会对那个无关进程组发 SIGTERM 乃至 SIGKILL。
+    因此额外校验该进程组确实是我们自己的下载进程(命令行含 hf_download/hfd/aria2c)。"""
     if not pgid: return False
-    try: os.killpg(pgid, 0); return True
+    try: os.killpg(pgid, 0)
     except Exception: return False
+    now = time.time()
+    hit = _pg_check_cache.get(pgid)
+    if hit and now - hit[0] < 1.5: return hit[1]
+    alive = False
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pgid)],
+                             capture_output=True, text=True, timeout=3)
+        cmd = (out.stdout or "").lower()
+        alive = ("hf_download" in cmd or "hfd" in cmd or "aria2c" in cmd)
+    except Exception:
+        alive = False      # 查不到就当已结束: 宁可重复续传, 也不误杀无关进程
+    if len(_pg_check_cache) > 200: _pg_check_cache.clear()
+    _pg_check_cache[pgid] = (now, alive)
+    return alive
 
 def _phase_of(t):
     """读取 <dest>/.hfd/status.json 的下载阶段; 读不到返回 None"""
@@ -957,7 +1028,8 @@ def _queue_watcher():
         time.sleep(8)
         try:
             refresh_hosts()      # 路由器换 IP / 换网后无需重启(内部限流 60s)
-            rotate_log(LOG)      # 长期运行不胀满磁盘
+            rotate_log(LOG)           # 主下载日志
+            _rotate_server_log()      # 服务自身日志(stdout)
             launch_list = []
             dirty = False  # 仅在有实际状态变化时落盘, 避免无任务时也每 8s 重写配置
             with _cfg_lock:
