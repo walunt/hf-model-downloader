@@ -61,7 +61,7 @@ function check(name, cond, detail) {
 const GB = 1024 ** 3;
 function task(over) {
   return Object.assign({
-    repo: "mlx-community/Qwen3-Coder-Next-4bit", dest: "/Users/walunt/mlx-models/a/b",
+    repo: "mlx-community/Qwen3-Coder-Next-4bit", dest: "/Users/<你>/mlx-models/a/b",
     endpoint: "mirror", x: 8, j: 5, want_run: true, alive: true, pct: 42.5,
     downloaded: 12 * GB, total: 28 * GB, files_done: 3, files_expected: 8,
     rate: 18.3e6, eta_sec: 3900, phase: "download", active: [],
@@ -245,7 +245,7 @@ check("空模型库显示提示", els["lib"].innerHTML.includes("还没有模型
 
 console.log("=== J) refresh 主渲染路径真实执行 ===");
 const statusPayload = {
-  cfg: { default_root: "/Users/walunt/mlx-models", username: "", speed_limit: 0, has_token: false,
+  cfg: { default_root: "/Users/<你>/mlx-models", username: "", speed_limit: 0, has_token: false,
          lan: false, lan_urls: [], global_j: 10, max_models: 2, x: 10, alloc_mode: "size" },
   consts: { max_conn: 64, max_models_limit: 8 },
   tasks: [
